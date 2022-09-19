@@ -1,0 +1,156 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+title: "Generate Simulated Epidemic Data"
+author: "Benjamen Simon"
+date: "September 2022"
+knit: (function(inputFile, encoding) { 
+          rmarkdown::render(
+            inputFile,
+            encoding = encoding, 
+            output_dir = "../Reports") 
+            })
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{enumerate}
+  - \usepackage{bm}
+  - \usepackage[T1]{fontenc}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, eval= TRUE, message = FALSE, cache.path = "Caches/", fig.path = "Figures/")
+
+options(scipen=999)
+```
+
+```{r Packages}
+
+  #install("EpidemicR")
+  library(EpidemicR) # For simulating and making inference on GSE epidemics
+  library(coda) # MCMC stuff
+
+  library(tidyverse)
+  library(ggplot2)
+  library(ggcorrplot)
+  library(xtable)
+  
+  options(scipen=999)
+
+```
+
+# Wrapper Function for generating a single epidemic
+
+```{r}
+
+GenerateEpidemic <- function(N, xlim, ylim, betas, ds, gamma){
+  # Generate a distance matrix
+   distance_mat <- EpidemicR::Dist_mat_unif(N, xlim, ylim)[[2]]
+
+# Generate an associated infection rate matrix
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, betas, ds) # A slight trick is used to generate a homogeneous epidemic
+   
+# Generate a simulated epidemic
+   sim <- EpidemicR::GSE_sim(N = N, beta.mat = rate_mat, gamma = gamma)
+
+  return(sim)
+}
+
+# GenerateEpidemic(N = 100, xlim = 20, ylim = 20, betas = c(0.002, 0.002), ds = 10, gamma = 0.15)
+
+```
+
+
+# Function for idenitifying a parameter set
+
+```{r}
+
+Identify_parameter_set <- function(N, xlim, ylim, betas, ps, gammas, ds, nsims){
+  
+  counter_r = 1
+  n_I = array(NA, c((length(betas)*length(ps)*length(gammas)*length(ds)), 4+nsims))
+  
+  for(b in betas){
+    for(p in ps){
+      for(d in ds){
+        for(g in gammas){
+          for(s in 1:nsims){
+            
+            sim = GenerateEpidemic(N, xlim, ylim, c(b, p*b), d, g)
+            
+            n_I[counter_r, c(1,2,3,4)] = c(b,d,g)
+            n_I[counter_r, 4+s] = sum(sim[,2] < Inf)/N * 100
+            
+          }
+          counter_r = counter_r + 1
+        }
+      }
+    }
+  }
+  
+  n_I_summary = data.frame(n_I) %>%
+                  group_by(cyl) %>%
+                  summarise(mean = mean(disp), n = n())
+  
+  return(n_I)
+}
+
+# Identify_parameter_set(N = 100, xlim = 20, ylim = 20, betas = seq(0.001, 0.003, 0.001), ps = c(1), ds = c(10), gammas = c(0.15), nsims = (100))
+
+
+data.frame(homo_params_sims) %>% 
+                            group_by(X1, X2, X3, X4) %>% 
+                            rowMeans()
+
+```
+
+
+
+
+
+
+
+# Homogeneous Epidemic
+
+First identify a parameter set with an average total infected as 25% of the population
+
+```{r Identify a parameter set for Homogeneous epidemic}
+
+betas = list(rep(0.0005, 2), rep(0.001, 2), rep(0.0015, 2), rep(0.002, 2), rep(0.0025, 2), rep(0.003, 2), rep(0.0035, 2), rep(0.004, 2), rep(0.0045, 2), rep(0.005, 2), rep(0.0055, 2), rep(0.006, 2))
+
+gammas = seq(0.03, 0.2, 0.01)
+
+
+homo_params_sims = Identify_parameter_set(N = 100, xlim = 20, ylim = 20, betas = betas, ds = c(10), gammas = gammas, nsims = (100))
+
+
+```
+
+
+
+
+
+```{r Generate a Homogeneous epidemic}
+
+# Generate a distance matrix
+   distance_mat <- EpidemicR::Dist_mat_unif(N=100, xlim = 20, ylim = 20)[[2]]
+
+# Generate an associated infection rate matrix
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(0.002, 0.002), 10) # A slight trick is used to generate a homogeneous epidemic
+   
+# Generate a simulated epidemic
+   Homo_sim <- EpidemicR::GSE_sim(N = 100, beta.mat = rate_mat, gamma = 0.15)
+
+# Total number of infected
+   n_I = sum(Homo_sim[,2] < Inf)
+  
+# Who is infected
+   inf.ids <- which(Homo_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Homo_sim[,2]
+
+# Removal times
+  rem.times <- Homo_sim[,3]
+```
+

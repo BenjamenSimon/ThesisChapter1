@@ -9,7 +9,7 @@ knit: (function(inputFile, encoding) {
           rmarkdown::render(
             inputFile,
             encoding = encoding, 
-            output_dir = "Reports") 
+            output_dir = "../Reports") 
             })
 header-includes:
   - \usepackage{amsmath}
