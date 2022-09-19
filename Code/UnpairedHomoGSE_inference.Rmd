@@ -1,0 +1,36 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+title: "Unpaired Homogeneous General Stochastic Epidemic Inference"
+author: "Benjamen Simon"
+date: "September 2022"
+knit: (function(inputFile, encoding) { 
+          rmarkdown::render(
+            inputFile,
+            encoding = encoding, 
+            output_dir = "Reports") 
+            })
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{enumerate}
+  - \usepackage{bm}
+  - \usepackage[T1]{fontenc}
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, eval= TRUE, message = FALSE, cache.path = "Caches/", fig.path = "Figures/")
+
+options(scipen=999)
+```
+
+```{r Packages}
+
+  library(tidyverse)
+  library(ggplot2)
+  library(ggcorrplot)
+  library(xtable)
+  
+  options(scipen=999)
+
+```
