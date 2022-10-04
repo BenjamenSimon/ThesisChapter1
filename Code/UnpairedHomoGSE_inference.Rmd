@@ -19,18 +19,477 @@ header-includes:
 ---
 
 ```{r setup, include=FALSE}
-knitr::opts_chunk$set(echo = FALSE, cache = TRUE, eval= TRUE, message = FALSE, cache.path = "Caches/", fig.path = "Figures/")
 
+# Rmarkdown settings
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, eval= TRUE, message = FALSE, cache.path = "Caches/", fig.path = "Figures/Homo/")
+
+# Default to non-scientific notation
 options(scipen=999)
+
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
+
 ```
 
 ```{r Packages}
 
+  ## Data manipulation
   library(tidyverse)
+
+  ## Plotting
   library(ggplot2)
   library(ggcorrplot)
-  library(xtable)
-  
-  options(scipen=999)
+  source("VisualisationFunctions.R")
+
+  ## MCMC Diagnostics
+  library(coda)
+
+  ## Epidemics
+  library(EpidemicR) # For simulating and making inference on GSE epidemics
 
 ```
+
+# Load in the epidemic
+
+The epidemic we have simulated has a modal number of infected individuals as roughly 25% of the population
+
+```{r Load epidemic}
+
+epi_list <- readRDS(file="../Data/Homo/epi_list.RData")
+
+# Distance matrix
+  spatial <- epi_list[[1]]
+  xy.coords <- spatial[[1]]
+  distance_mat <- spatial[[2]]
+
+# Associated infection rate matrix
+  params <- epi_list[[2]]
+  rate_mat <- epi_list[[3]]
+   
+# Simulated epidemic
+  Homo_sim <- epi_list[[4]]
+
+# Total number of infected
+  n_I = sum(Homo_sim[,2] < Inf)
+  
+# Who is infected
+  inf.ids <- which(Homo_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Homo_sim[,2]
+
+# Removal times
+  rem.times <- Homo_sim[,3]
+  
+# Plot the epidemic
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Homo_sim, init.inf = c(1))
+
+```
+
+# Component functions of the MCMC algorithm
+
+## The likelihood / posterior
+
+```{r Calculte integrals}
+
+int.calc <- function(R = rem.times, I = inf.times, N){
+  
+  I <- I[which( I < Inf )]
+  R <- R[which( R < Inf )]
+  
+  I <- sort(I)
+  R <- sort(R)
+  
+  n.I = length(I)
+  
+  # Calculate the double sum for the infection part
+  
+  sum_n_n <- matrix(nrow = n.I, ncol = n.I)
+  
+  for(i in 1:n.I){
+    for(j in 1:n.I){
+      sum_n_n[i,j] <- (  min( c(R[i], I[j]) ) - min( c(I[i], I[j]) )  )
+    }
+  }
+  
+  sum_n_n <- sum(sum_n_n)
+  
+  # Calculate the single sum used in both parts
+  
+  sum_n <- sum(R-I)
+  
+  # Evaluate the infection and removal integrals
+  
+  int.xy <- sum_n_n + (N-n.I) * sum_n
+  int.y <- sum_n
+  
+  return(c(int.xy, int.y))
+}
+
+```
+
+```{r Calculate product}
+
+log.prod.calc <- function(R = rem.times, I = inf.times, N){
+  
+  inf.ids <- which(I < Inf)
+  
+  kappa <- which.min(I[inf.ids])
+  
+  n.I = length(inf.ids)
+  
+  num.suscept <- rep(NA, (n.I - 1))
+  num.infect <- rep(NA, (n.I - 1))
+  
+  j=1
+  
+  for(i in inf.ids[-kappa]){
+    
+    num.suscept[j] <- sum(I >= I[i]) # >= because looking at just before
+    
+    num.infect[j] <-  N - num.suscept[j] - sum(R < I[i])
+    
+    j = j+1
+  }
+  
+  log.prod <- sum(log( num.suscept * num.infect ))
+
+  return(log.prod)
+}
+  
+```
+
+Thus we can now bring the two parts together and calculate the log-likelihood (more accurately the log-posterior for the infection times);
+
+```{r Calculate likelihood}
+
+simple_llh <- function(inf.times, rem.times, N, beta, gamma){
+  
+  ints <- int.calc(R = rem.times, I = inf.times, N)
+    
+  int.xy <- ints[1]
+  int.y <- ints[2]
+  
+  prod <- log.prod.calc(R = rem.times, I = inf.times, N)
+    
+  llh <- prod - beta * int.xy - gamma * int.y
+  
+  return(llh)
+}
+
+```
+
+## Metropolis-Hastings Acceptance Probability
+
+```{r Calculate MH accept prob}
+
+alpha.calc <- function(llh, llh.prime){
+	alpha <- exp(llh.prime - llh)
+	return(min(c(1, alpha)))
+}
+
+```
+
+## The MCMC algorithm
+
+Assuming we know the true infection times, we can remove the Metropolis-Hastings step and reduce the algorithm down to just a Gibbs sampler.
+
+```{r Simple MCMC algorithm with I known}
+
+Simple_MCMC_Iknown <- function(N, n.I, inf.times, rem.times, N.its, infupdate){
+  
+  #######################################
+  ### Initialise the hyper parameters ###
+  #######################################
+  
+      lambda.b = 0.001
+      nu.b = 1
+      lambda.g = 0.001
+      nu.g = 1
+  
+  ##############################################
+  ### Initialise the parameters and epidemic ###
+  ##############################################
+    
+      rem.times <- sort(rem.times)
+      inf.times <- sort(inf.times)
+      n.I <- sum(rem.times < Inf)
+
+  ######################    
+  ### Results matrix ###
+  ######################
+      
+      res <- matrix(ncol = 4, nrow = N.its)
+      colnames(res) <- c("sample", "beta", "gamma", "llh")
+  
+  ##########################
+  ### Functional objects ###
+  ##########################
+      
+      it = 1
+      
+      ints <-  int.calc(R = rem.times, I = inf.times, N)
+      
+      acc.sum.I = 0
+  
+  ###########################
+  ### ~~ THE ALGORITHM ~~ ###
+  ###########################
+     
+      while(it <= N.its){
+
+            ###############################
+            ### Gibbs sampler for gamma ###
+            ###############################
+        
+                beta.cur <- rgamma(n=1, shape = (n.I-1+nu.b), rate = (lambda.b + ints[1]))
+                
+            ###############################
+            ### Gibbs sampler for gamma ###
+            ###############################
+        
+                gamma.cur <- rgamma(n=1, shape = (n.I+nu.g), rate = (lambda.g + ints[2]))
+                
+                llh <- simple_llh(inf.times, rem.times, N, beta.cur, gamma.cur)
+                
+                # Record beta and gamma
+                res[it,] <- c(it, beta.cur, gamma.cur, llh)
+                
+                # Update count
+                it = it + 1
+      }
+  
+  return(list(res, (acc.sum.I/N.its)))
+}
+
+```
+
+As is more often the case, when the infection times are unknown we use MH methods
+
+```{r Simple MCMC algorithm}
+
+Simple_MCMC <- function(N, n.I, rem.times, N.its, infupdate){
+  
+  #######################################
+  ### Initialise the hyper parameters ###
+  #######################################
+  
+      lambda.b = 0.001
+      nu.b = 1
+      lambda.g = 0.001
+      nu.g = 1
+  
+  ##############################################
+  ### Initialise the parameters and epidemic ###
+  ##############################################
+    
+      rem.times <- sort(rem.times)
+      n.I <- sum(rem.times < Inf)
+      
+      repeat{
+        
+        beta.cur <- runif(1, 0, 0.1)
+        gamma.cur <- runif(1, 0, 0.2)
+        
+        inf.times <- c(0, rep(Inf, (N-1)))
+        
+    		for(i in 2:n.I){
+          inf.times[i] <- runif(1, 0, rem.times[(i-1)])
+        }
+        inf.times <- sort(inf.times)
+    
+    		if(simple_llh(inf.times, rem.times, N, beta.cur, gamma.cur) != -Inf){ break }
+      }
+      
+      print("initialised")
+  
+  ##########################################
+  ### Start and end time of the epidemic ###
+  ##########################################
+      
+      inf.ids <- which(rem.times < Inf)
+      kappa <- which.min(inf.times[inf.ids])
+      
+      I1 <- inf.times[which.min(inf.times)]
+      T <- max(rem.times[inf.ids])
+      
+  ######################    
+  ### Results matrix ###
+  ######################
+      
+      res <- matrix(ncol = 4, nrow = N.its)
+      colnames(res) <- c("sample", "beta", "gamma", "llh")
+  
+  ##########################
+  ### Functional objects ###
+  ##########################
+      
+      it = 1
+      
+      llh <- simple_llh(inf.times, rem.times, N, beta.cur, gamma.cur)
+      ints <-  int.calc(R = rem.times, I = inf.times, N)
+      
+      acc.sum.I = 0
+  
+  ###########################
+  ### ~~ THE ALGORITHM ~~ ###
+  ###########################
+     
+      while(it <= N.its){
+
+            ###############################
+            ### Gibbs sampler for gamma ###
+            ###############################
+        
+                beta.cur <- rgamma(n=1, shape = (n.I-1+nu.b), rate = (lambda.b + ints[1]))
+                
+            ###############################
+            ### Gibbs sampler for gamma ###
+            ###############################
+        
+                gamma.cur <- rgamma(n=1, shape = (n.I+nu.g), rate = (lambda.g + ints[2]))
+                
+                llh <- simple_llh(inf.times, rem.times, N, beta.cur, gamma.cur)
+                      
+            ###################################
+            ### MH step for infection times ###
+            ###################################
+
+                # Which infection time is being replaced
+                kappa <- which.min(inf.times[inf.ids])
+                Ireplace <- sample(inf.ids[-kappa], infupdate)
+
+                # Draw new infection times
+                I1 <- inf.times[1]
+                Idraw <- runif(infupdate, I1, T)
+
+                inf.times.prime <- inf.times
+                inf.times.prime[Ireplace] <- Idraw
+                inf.times.prime <- sort(inf.times.prime)
+
+                # Calculate functional objects for new infection times
+
+                llh.prime <- simple_llh(inf.times.prime, rem.times, N, beta.cur, gamma.cur)
+
+                # MH acceptance probability
+                alpha <- alpha.calc(llh, llh.prime)
+                
+                # Do we accept the new time or not?
+                accept.test <- runif(1,0,1)
+                if(accept.test < alpha){ #If yes:
+                  
+                  inf.times <- inf.times.prime
+                  
+                  ints <- int.calc(R = rem.times, I = inf.times, N)
+                  llh <- llh.prime
+                  
+                  acc.sum.I = acc.sum.I+1
+                }
+                
+                # Record beta and gamma
+                res[it,] <- c(it, beta.cur, gamma.cur, llh)
+                
+                # Update count
+                it = it + 1
+      }
+  
+  return(list(res, (acc.sum.I/N.its)))
+}
+
+```
+
+# Making inference (Infection times known)
+
+```{r Performing analysis I known}
+
+set.seed(412)
+
+## Run the algorithm
+
+start.time <- Sys.time()
+
+res.list.Iknown <- Simple_MCMC_Iknown(N=100, n.I=n_I, inf.times, rem.times, N.its = 100000, infupdate = 1)
+
+end.time <- Sys.time()
+
+res.Iknown <- res.list.Iknown[[1]]
+
+
+## Summarise the results
+
+summary(res.Iknown[-(1:5000),])
+
+```
+
+```{r Plot the results I known}
+
+## Plot the results
+
+trace_plot_I_known = gg_trace_plot_homo(res.Iknown, params, 10000, c(20000, 0.0005, 20000, 0.03), c(0, 0.004, 0, 0.4))
+
+hist_plot_I_known = gg_hist_plot_homo(res.Iknown, params, 10000, c(0.004, 700, 0.3, 8), c(0, 0.005, 0, 0.35))
+
+
+## Save the results
+
+ggsave(filename = "../Visualisation/Homo/trace_I_known.png", plot = trace_plot_I_known, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/Homo/hist_I_known.png", plot = hist_plot_I_known, width = 10, height = 8)
+
+```
+
+The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
+
+The algorithm estimates the mean, median, and quartiles of $\beta$ to be `r mean(res.Iknown[-(1:5000),2])` (`r quantile(res.Iknown[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$  `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res.Iknown[,2]))`. It estimates the mean, median, and quartiles of $\gamma$ to be `r mean(res.Iknown[-(1:5000),3])` (`r quantile(res.Iknown[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\gamma =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res.Iknown[,3]))`.
+
+
+
+# Making inference (Infection times unknown)
+
+Using our simulated epidemic from earlier, we will now apply our MCMC algorithm in an effort to make inference and recover the parameters.
+
+```{r Performing analysis}
+
+set.seed(403)
+
+## Run the algorithm
+
+start.time <- Sys.time()
+
+res.list <- Simple_MCMC(N=100, n.I=n_I, rem.times, N.its = 100000, infupdate = 1)
+
+end.time <- Sys.time()
+
+res.list[[2]] #avg. acceptance prob. of I
+
+res <- res.list[[1]]
+
+## Summarise the results
+
+summary(res[-(1:5000),])
+
+```
+
+```{r Plot the results}
+
+## Plot the results
+
+trace_plot_I_unknown = gg_trace_plot_homo(res, params, 10000, c(20000, 0.0005, 20000, 0.05), c(0, 0.007, 0, 0.7))
+
+hist_plot_I_unknown = gg_hist_plot_homo(res, params, 10000, c(0.006, 350, 0.6, 4), c(0, 0.007, 0, 0.7))
+
+
+## Save the results
+
+ggsave(filename = "../Visualisation/Homo/trace_I_unknown.png", plot = trace_plot_I_unknown, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/Homo/hist_I_unknown.png", plot = hist_plot_I_unknown, width = 10, height = 8)
+
+```
+
+The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
+
+The algorithm estimates the mean, median, and quartiles of $\beta$ to be `r mean(res[-(1:5000),2])` (`r quantile(res[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$ `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res[,2]))`. It estimates the mean, median, and quartiles of $\gamma$ to be `r mean(res[-(1:5000),3])` (`r quantile(res[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\gamma =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res[,3]))`.
+
+
+

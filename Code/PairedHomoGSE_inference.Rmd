@@ -1,0 +1,190 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+title: "Unpaired Homogeneous General Stochastic Epidemic Inference"
+author: "Benjamen Simon"
+date: "September 2022"
+knit: (function(inputFile, encoding) { 
+          rmarkdown::render(
+            inputFile,
+            encoding = encoding, 
+            output_dir = "../Reports") 
+            })
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{enumerate}
+  - \usepackage{bm}
+  - \usepackage[T1]{fontenc}
+---
+
+```{r setup, include=FALSE}
+
+# Rmarkdown settings
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, eval= TRUE, message = FALSE, cache.path = "Caches/", fig.path = "Figures/HomoPaired/")
+
+# Default to non-scientific notation
+options(scipen=999)
+
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+```{r Packages}
+
+  ## Data manipulation
+  library(tidyverse)
+
+  ## Plotting
+  library(ggplot2)
+  library(ggcorrplot)
+  source("VisualisationFunctions.R")
+
+  ## MCMC Diagnostics
+  library(coda)
+
+  ## Epidemics
+  library(EpidemicR) # For simulating and making inference on GSE epidemics
+
+```
+
+# Load in the epidemic
+
+The epidemic we have simulated has a modal number of infected individuals as roughly 25% of the population
+
+```{r Load epidemic}
+
+epi_list <- readRDS(file="../Data/Homo/epi_list.RData")
+
+# Distance matrix
+  spatial <- epi_list[[1]]
+  xy.coords <- spatial[[1]]
+  distance_mat <- spatial[[2]]
+
+# Associated infection rate matrix
+  params <- epi_list[[2]]
+  rate_mat <- epi_list[[3]]
+   
+# Simulated epidemic
+  Homo_sim <- epi_list[[4]]
+
+# Total number of infected
+  n_I = sum(Homo_sim[,2] < Inf)
+  
+# Who is infected
+  inf.ids <- which(Homo_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Homo_sim[,2]
+
+# Removal times
+  rem.times <- Homo_sim[,3]
+  
+# Plot the epidemic
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Homo_sim, init.inf = c(1))
+
+```
+
+
+
+
+# Making inference (Infection times known)
+
+Assuming we know the true infection times, we can remove the Metropolis-Hastings step and reduce the algorithm down to just a Gibbs sampler.
+
+```{r Performing analysis I known}
+
+set.seed(1104)
+
+## Run the algorithm
+
+start.time <- Sys.time()
+
+res.list.Iknown <- MCMC_homo(N.its = 100000, N = 100, inf.ids, rem.times, distance_mat,
+            inc.beta = list(NA, T), inc.inf.times = list(inf.times, F), inc.gamma = list(NA, T), infupdate = 6)
+
+end.time <- Sys.time()
+
+res.Iknown <- res.list.Iknown[[1]]
+
+
+## Summarise the results
+
+summary(res.Iknown[-(1:5000),])
+
+```
+
+```{r Plot the results I known}
+
+## Plot the results
+
+trace_plot_I_known = gg_trace_plot_homo(res.Iknown, params, 10000, c(20000, 0.0005, 20000, 0.03), c(0, 0.004, 0, 0.4))
+
+hist_plot_I_known = gg_hist_plot_homo(res.Iknown, params, 10000, c(0.004, 700, 0.3, 8), c(0, 0.005, 0, 0.35))
+
+
+## Save the results
+
+ggsave(filename = "../Visualisation/HomoPaired/trace_I_known.png", plot = trace_plot_I_known, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/HomoPaired/hist_I_known.png", plot = hist_plot_I_known, width = 10, height = 8)
+
+```
+
+The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
+
+The algorithm estimates the mean, median, and quartiles of $\beta$ to be `r mean(res.Iknown[-(1:5000),2])` (`r quantile(res.Iknown[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$  `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res.Iknown[,2]))`. It estimates the mean, median, and quartiles of $\gamma$ to be `r mean(res.Iknown[-(1:5000),3])` (`r quantile(res.Iknown[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\gamma =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res.Iknown[,3]))`.
+
+
+
+# Making inference (Infection times unknown)
+
+Using our simulated epidemic from earlier, we will now apply our MCMC algorithm in an effort to make inference and recover the parameters.
+
+```{r Performing analysis}
+
+set.seed(1102)
+
+## Run the algorithm
+
+start.time <- Sys.time()
+
+res.list <- MCMC_homo(N.its = 100000, N = 100, inf.ids, rem.times, distance_mat,
+            inc.beta = list(NA, T), inc.inf.times = list(NA, T), inc.gamma = list(NA, T), infupdate = 6)
+
+end.time <- Sys.time()
+
+res.list[[2]] #avg. acceptance prob. of I
+
+res <- res.list[[1]]
+
+## Summarise the results
+
+summary(res[-(1:5000),])
+
+```
+
+```{r Plot the results}
+
+## Plot the results
+
+trace_plot_I_unknown = gg_trace_plot_homo(res, params, 10000, c(20000, 0.0004, 20000, 0.04), c(0, 0.0065, 0, 0.65))
+
+hist_plot_I_unknown = gg_hist_plot_homo(res, params, 10000, c(0.005, 350, 0.5, 4), c(0, 0.007, 0, 0.6))
+
+
+## Save the results
+
+ggsave(filename = "../Visualisation/HomoPaired/trace_I_unknown.png", plot = trace_plot_I_unknown, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/HomoPaired/hist_I_unknown.png", plot = hist_plot_I_unknown, width = 10, height = 8)
+
+```
+
+The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
+
+The algorithm estimates the mean, median, and quartiles of $\beta$ to be `r mean(res[-(1:5000),2])` (`r quantile(res[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$ `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res[,2]))`. It estimates the mean, median, and quartiles of $\gamma$ to be `r mean(res[-(1:5000),3])` (`r quantile(res[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\gamma =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res[,3]))`.
+
+
+

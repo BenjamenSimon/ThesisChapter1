@@ -19,56 +19,83 @@ header-includes:
 ---
 
 ```{r setup, include=FALSE}
+
+# Rmarkdown settings
 knitr::opts_chunk$set(echo = FALSE, cache = TRUE, eval= TRUE, message = FALSE, cache.path = "Caches/", fig.path = "Figures/")
 
+# Default to non-scientific notation
 options(scipen=999)
+
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
+
 ```
 
 ```{r Packages}
 
-  #install("EpidemicR")
-  library(EpidemicR) # For simulating and making inference on GSE epidemics
-  library(coda) # MCMC stuff
-
+  ## Data manipulation
   library(tidyverse)
-  library(ggplot2)
-  library(ggcorrplot)
-  library(xtable)
-  
-  options(scipen=999)
+
+  ## Epidemics
+  library(EpidemicR) # For simulating and making inference on GSE epidemics
 
 ```
 
-# Wrapper Function for generating a single epidemic
+# Custom Functions
 
-```{r}
+## Wrapper Function for generating a single epidemic
 
-GenerateEpidemic <- function(N, xlim, ylim, betas, ds, gamma){
+```{r Wrapper function}
+
+GenerateEpidemic <- function(model, N, betas, d, gamma, ...){
+  
+  if(model == "Unif"){
+    distfunc <- EpidemicR::Dist_mat_unif
+  }
+  if(model == "Clust"){
+    distfunc <- EpidemicR::Dist_mat_clust
+  }
+  if(model == "Edge"){
+    distfunc <- EpidemicR::Dist_mat_edge
+  }
+  if(model == "Latt"){
+    distfunc <- EpidemicR::Dist_mat_latt
+  }
+  if(model == "Lines"){
+    distfunc <- EpidemicR::Dist_mat_lines
+  }
+  if(model == "Trials"){
+    distfunc <- EpidemicR::Dist_mat_trials
+  }
+  
   # Generate a distance matrix
-   distance_mat <- EpidemicR::Dist_mat_unif(N, xlim, ylim)[[2]]
+   distance_mat <- distfunc(N, ...)[[2]]
 
-# Generate an associated infection rate matrix
-   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, betas, ds) # A slight trick is used to generate a homogeneous epidemic
+  # Generate an associated infection rate matrix
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, betas, d) # A slight trick is used to generate a homogeneous epidemic
    
-# Generate a simulated epidemic
+  # Generate a simulated epidemic
    sim <- EpidemicR::GSE_sim(N = N, beta.mat = rate_mat, gamma = gamma)
 
   return(sim)
 }
 
-# GenerateEpidemic(N = 100, xlim = 20, ylim = 20, betas = c(0.002, 0.002), ds = 10, gamma = 0.15)
+# GenerateEpidemic(model = "Unif", N = 100, betas = c(0.002, 0.002), d = 10, gamma = 0.15, xlim = 20, ylim = 20)
 
 ```
 
+## Function for idenitifying a parameter set
 
-# Function for idenitifying a parameter set
+```{r Parameter Set Identifier}
 
-```{r}
-
-Identify_parameter_set <- function(N, xlim, ylim, betas, ps, gammas, ds, nsims){
+Identify_parameter_set <- function(model, N, betas, ps, gammas, ds, nsims, ...){
   
-  counter_r = 1
-  n_I = array(NA, c((length(betas)*length(ps)*length(gammas)*length(ds)), 4+nsims))
+  num_param_sets = (length(betas)*length(ps)*length(gammas)*length(ds))
+
+  n_I = array(NA, c(nsims*num_param_sets, 5))
+  # one row for each sim, one column per variable of interest
+  
+  counter = 1
   
   for(b in betas){
     for(p in ps){
@@ -76,81 +103,839 @@ Identify_parameter_set <- function(N, xlim, ylim, betas, ps, gammas, ds, nsims){
         for(g in gammas){
           for(s in 1:nsims){
             
-            sim = GenerateEpidemic(N, xlim, ylim, c(b, p*b), d, g)
+            sim = GenerateEpidemic(model = model, N = N, betas = c(b, p*b), d = d, gamma = g, ...)
             
-            n_I[counter_r, c(1,2,3,4)] = c(b,d,g)
-            n_I[counter_r, 4+s] = sum(sim[,2] < Inf)/N * 100
+            n_I[counter, c(1,2,3,4)] = c(b, p*b, d, g)
+            n_I[counter, 5] = sum(sim[,2] < Inf)/N * 100
             
+            counter = counter + 1
           }
-          counter_r = counter_r + 1
         }
       }
     }
   }
   
-  n_I_summary = data.frame(n_I) %>%
-                  group_by(cyl) %>%
-                  summarise(mean = mean(disp), n = n())
+  nI_df = data.frame(n_I) %>% 
+                    rename(beta_1 = X1, beta_2 = X2, d = X3, gamma = X4, nI = X5) %>% 
+                    group_by(beta_1, beta_2, d, gamma) %>% 
+                    summarise(mean = mean(nI), median = median(nI), in_range = sum(nI > 20 & nI < 30)) %>% 
+                    filter(quantile(in_range, 0.9)<in_range) %>% 
+                    arrange(desc(in_range), mean, median)
   
-  return(n_I)
+  return(nI_df)
 }
 
-# Identify_parameter_set(N = 100, xlim = 20, ylim = 20, betas = seq(0.001, 0.003, 0.001), ps = c(1), ds = c(10), gammas = c(0.15), nsims = (100))
-
-
-data.frame(homo_params_sims) %>% 
-                            group_by(X1, X2, X3, X4) %>% 
-                            rowMeans()
+# Identify_parameter_set(model = "Unif", N = 100, betas = seq(0.001, 0.006, 0.001), ps = c(1), ds = c(10), gammas = c(0.12), nsims = 10, xlim = 20, ylim = 20)
 
 ```
 
+## Function to generate the histogram of final size
 
+```{r Histogram of final size}
 
+Hist_final_size <- function(model, N, betas, gamma, d, nsims, ...){
+  
+  n_I = rep(NA, nsims)
+  
+  valid_seeds = array(NA, nsims)
+  
+  for(s in 1:nsims){
+    
+    set.seed(s)
+    
+    sim = GenerateEpidemic(model = model, N = N, betas = betas, d = d, gamma = gamma, ...)
+    
+    n_I[s] = sum(sim[,2] < Inf)/N * 100
+    
+    if(n_I[s] == 25){
+      valid_seeds[s] = s
+    }
+  }
+  
+  print(head(na.omit(as.data.frame(valid_seeds))))
 
+  hist(n_I, breaks = 50)
+  abline(v = mean(n_I), # Add line for mean
+          col = "red",
+          lwd = 3)
+  text(x = mean(n_I)+ 11, # Add text for mean
+     y = mean(n_I) * nsims * 0.01,
+     paste("Mean =", mean(n_I)),
+     col = "red",
+     cex = 1)
+  abline(v = median(n_I),# Add line for median
+         col = "blue",
+         lwd = 3)
+  text(x = median(n_I)+ 9, # Add text for median
+     y = median(n_I) * nsims * 0.1,
+     paste("Median =", median(n_I)),
+     col = "blue",
+     cex = 1)
+}
 
+# Hist_final_size(model = "Unif", N = 100, betas = c(0.0005, 0.0005), d = 10, gamma = 0.03, nsims = 500, xlim = 20, ylim = 20)
 
+```
 
 # Homogeneous Epidemic
 
-First identify a parameter set with an average total infected as 25% of the population
+The case where all individuals in the population make contact at a single rate $\beta$.
+
+First identify a parameter set with an modal total number infected of around 25% of the population.
 
 ```{r Identify a parameter set for Homogeneous epidemic}
 
-betas = list(rep(0.0005, 2), rep(0.001, 2), rep(0.0015, 2), rep(0.002, 2), rep(0.0025, 2), rep(0.003, 2), rep(0.0035, 2), rep(0.004, 2), rep(0.0045, 2), rep(0.005, 2), rep(0.0055, 2), rep(0.006, 2))
+set.seed(1)
 
-gammas = seq(0.03, 0.2, 0.01)
+betas = seq(0.001, 0.005, 0.0005)
 
+gammas = seq(0.1, 0.3, 0.01)
 
-homo_params_sims = Identify_parameter_set(N = 100, xlim = 20, ylim = 20, betas = betas, ds = c(10), gammas = gammas, nsims = (100))
+parameter_options = Identify_parameter_set(model = "Unif", N = 100, betas = betas, ps = c(1), ds = c(10), gammas = gammas, nsims = 1000, xlim = 20, ylim = 20)
 
+parameter_options
 
 ```
 
+In this case we choose $\beta = 0.003$ and $\gamma = 0.23$.
 
+The following histograms show the distribution of final sizes for this parameter set, and the table provides some seeds that generate an epidemic of the desired size.
 
+```{r Plot histograms for Homogeneous epidemic}
 
+Hist_final_size(model = "Unif", N = 100, betas = c(0.003, 0.003), d = 10, gamma = 0.23, nsims = 10000, xlim = 20, ylim = 20)
+
+Hist_final_size(model = "Unif", N = 100, betas = c(0.005, 0.005), d = 10, gamma = 0.29, nsims = 10000, xlim = 20, ylim = 20)
+
+```
+
+Finally, generate the chosen epidemic and save the results
 
 ```{r Generate a Homogeneous epidemic}
 
+set.seed(263)
+
 # Generate a distance matrix
-   distance_mat <- EpidemicR::Dist_mat_unif(N=100, xlim = 20, ylim = 20)[[2]]
+  spatial <- EpidemicR::Dist_mat_unif(N=100, xlim = 20, ylim = 20)
+  xy.coords <- spatial[[1]]
+  distance_mat <- spatial[[2]]
 
 # Generate an associated infection rate matrix
-   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(0.002, 0.002), 10) # A slight trick is used to generate a homogeneous epidemic
+  params <- c("beta1" = 0.003, "beta2" = 0.003, "gamma" = 0.23, "d" = 10, "p" = 1, "llh" = NA)
+  rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(params["beta1"], params["beta2"]), params["d"]) # A slight trick is used to generate a homogeneous epidemic
    
 # Generate a simulated epidemic
-   Homo_sim <- EpidemicR::GSE_sim(N = 100, beta.mat = rate_mat, gamma = 0.15)
+  Homo_sim <- EpidemicR::GSE_sim(N = 100, beta.mat = rate_mat, gamma = 0.23)
 
 # Total number of infected
-   n_I = sum(Homo_sim[,2] < Inf)
+  n_I = sum(Homo_sim[,2] < Inf)
   
 # Who is infected
-   inf.ids <- which(Homo_sim[,2] < Inf)
+  inf.ids <- which(Homo_sim[,2] < Inf)
 
 # Infection times
   inf.times <- Homo_sim[,2]
 
 # Removal times
   rem.times <- Homo_sim[,3]
+  
+# Calculate Likelihood
+  params["llh"] <- EpidemicR::log_likelihood(inf.times, rem.times, rate_mat)
+  
+# Plot the epidemic
+  pdf("../Data/Homo/epi_plot.pdf") 
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Homo_sim, init.inf = c(1))
+  while (!is.null(dev.list()))  dev.off() # save plot
 ```
 
+```{r Save the Homogeneous epidemic}
+
+epi_list = list(spatial, params, rate_mat, Homo_sim)
+
+saveRDS(epi_list, file="../Data/Homo/epi_list.RData")
+
+```
+
+
+
+
+
+# Heterogeneous Epidemic (Uniform spatial distribution)
+
+The case where individuals are arranged randomly on a grid, and individuals within Euclidean distance $d$ of each other make contact at rate $\beta_1$, otherwise at rate $\beta_2$.
+
+First identify a parameter set with an modal total number infected of around 25% of the population.
+
+```{r Identify a parameter set for Heterogeneous (Unif) epidemic}
+
+set.seed(1)
+
+betas = seq(0.001, 0.007, 0.0005)
+
+ps = seq(0.01, 0.1, 0.01)
+
+gammas = seq(0.1, 0.4, 0.01)
+
+ds = seq(1, 5, 1)
+
+parameter_options = Identify_parameter_set(model = "Unif", N = 100, betas = betas, ps = ps, ds = ds, gammas = gammas, nsims = 1000, xlim = 20, ylim = 20)
+
+parameter_options
+
+```
+
+In this case we choose $\beta_1 = 0.007$, $\beta_2 = 0.00007$, $d = 5$, and $\gamma = 0.11$.
+
+The following histograms show the distribution of final sizes for this parameter set, and the table provides some seeds that generate an epidemic of the desired size.
+
+```{r Plot histograms for Heterogeneous (Unif) epidemic}
+
+Hist_final_size(model = "Unif", N = 100, betas = c(0.007, 0.00007), d = 5, gamma = 0.11, nsims = 10000, xlim = 20, ylim = 20)
+
+```
+
+Finally, generate the chosen epidemic and save the results
+
+```{r Generate epidemic 2}
+
+set.seed(295)
+
+# Generate a distance matrix
+   spatial <- EpidemicR::Dist_mat_unif(N=100, xlim = 20, ylim = 20)
+   xy.coords <- spatial[[1]]
+   distance_mat <- spatial[[2]]
+
+# Generate an associated infection rate matrix
+   params <- c("beta1" = 0.007, "beta2" = 0.00007, "gamma" = 0.11, "d" = 5, "p" = 0.01, "llh" = NA)
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(params["beta1"], params["beta2"]), params["d"])
+   
+# Generate a simulated epidemic
+   Hetero_sim <- EpidemicR::GSE_sim(N = 100, beta.mat = rate_mat, gamma = 0.11)
+   
+# Total number of infected
+   n_I = sum(Hetero_sim[,2] < Inf)
+  
+# Who is infected
+   inf.ids <- which(Hetero_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Hetero_sim[,2]
+
+# Removal times
+  rem.times <- Hetero_sim[,3]
+
+# Calculate Likelihood
+  params["llh"] <- EpidemicR::log_likelihood(inf.times, rem.times, rate_mat)
+  
+# Plot the epidemic
+  pdf("../Data/HeteroUnif/epi_plot.pdf") 
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Hetero_sim, init.inf = c(1))
+  while (!is.null(dev.list()))  dev.off() # save plot
+```
+
+```{r Save the Hetero Unif epidemic}
+
+epi_list = list(spatial, params, rate_mat, Hetero_sim)
+
+saveRDS(epi_list, file="../Data/HeteroUnif/epi_list.RData")
+
+```
+
+
+
+
+# Heterogeneous Epidemic (Uniform spatial distribution with $\beta_2$ = 0)
+
+The case where individuals are arranged randomly on a grid, and individuals within Euclidean distance $d$ of each other make contact at rate $\beta_1$, otherwise at rate $\beta_2 = 0$, ie. they don't make contact.
+
+First identify a parameter set with an modal total number infected of around 25% of the population.
+
+```{r Identify a parameter set for Heterogeneous (b2 = 0) epidemic}
+
+set.seed(1)
+
+betas = seq(0.001, 0.007, 0.0005)
+
+gammas = seq(0.1, 0.4, 0.02)
+
+ds = seq(0.5, 5, 0.5)
+
+parameter_options = Identify_parameter_set(model = "Unif", N = 100, betas = betas, ps = c(0), ds = ds, gammas = gammas, nsims = 1000, xlim = 20, ylim = 20)
+
+parameter_options
+
+```
+
+In this case we choose $\beta_1 = 0.007$, $\beta_2 = 0$, $d = 5$, and $\gamma = 0.1$.
+
+The following histograms show the distribution of final sizes for this parameter set, and the table provides some seeds that generate an epidemic of the desired size.
+
+```{r Plot histograms for Heterogeneous (b2 = 0) epidemic}
+
+Hist_final_size(model = "Unif", N = 100, betas = c(0.007, 0), d = 10, gamma = 0.1, nsims = 10000, xlim = 50, ylim = 10)
+
+```
+
+Finally, generate the chosen epidemic and save the results
+
+```{r Generate epidemic 3}
+
+set.seed(13)
+
+# Generate a distance matrix
+   spatial <- EpidemicR::Dist_mat_unif(N=100, xlim = 50, ylim = 10)
+   xy.coords <- spatial[[1]]
+   distance_mat <- spatial[[2]]
+
+# Generate an associated infection rate matrix
+   params <- c("beta1" = 0.1, "beta2" = 0, "gamma" = 0.15, "d" = 2.5, "p" = 0, "llh" = NA)
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(params["beta1"], params["beta2"]), params["d"])
+   
+# Generate a simulated epidemic
+   Hetero_sim <- EpidemicR::GSE_sim(N = 100, beta.mat = rate_mat, gamma = 0.15)
+   
+# Total number of infected
+   n_I = sum(Hetero_sim[,2] < Inf)
+  
+# Who is infected
+   inf.ids <- which(Hetero_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Hetero_sim[,2]
+
+# Removal times
+  rem.times <- Hetero_sim[,3]
+
+# Calculate Likelihood
+  params["llh"] <- EpidemicR::log_likelihood(inf.times, rem.times, rate_mat)
+  
+# Plot the epidemic
+  pdf("../Data/Hetero_b2_0/epi_plot.pdf") 
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Hetero_sim, init.inf = c(1))
+  while (!is.null(dev.list()))  dev.off() # save plot
+```
+
+```{r Save the Hetero b2 0 epidemic}
+
+epi_list = list(spatial, params, rate_mat, Hetero_sim)
+
+saveRDS(epi_list, file="../Data/Hetero_b2_0/epi_list.RData")
+
+```
+
+
+
+
+
+# Heterogeneous Epidemic (Uniform spatial distribution on a rectangular space)
+
+The case where individuals are arranged randomly on a grid, and individuals within Euclidean distance $d$ of each other make contact at rate $\beta_1$, otherwise at rate $\beta_2$. This time the grid is a long thin rectangle instead of a square.
+
+First identify a parameter set with an modal total number infected of around 25% of the population.
+
+```{r Identify a parameter set for Heterogeneous (Rect) epidemic}
+
+set.seed(1)
+
+betas = seq(0.001, 0.007, 0.0005)
+
+ps = seq(0.01, 0.1, 0.01)
+
+gammas = seq(0.1, 0.4, 0.02)
+
+ds = seq(0.5, 5, 0.5)
+
+parameter_options = Identify_parameter_set(model = "Unif", N = 100, betas = betas, ps = ps, ds = ds, gammas = gammas, nsims = 1000, xlim = 50, ylim = 10)
+
+parameter_options
+
+```
+
+In this case we choose $\beta_1 = 0.0020$, $\beta_2 = 0.00007$, $d = 5$, and $\gamma = 0.11$.
+
+The following histograms show the distribution of final sizes for this parameter set, and the table provides some seeds that generate an epidemic of the desired size.
+
+```{r Plot histograms for Heterogeneous (Rect) epidemic}
+
+Hist_final_size(model = "Unif", N = 100, betas = c(0.003, 0.003), d = 10, gamma = 0.23, nsims = 10000, xlim = 50, ylim = 10)
+
+Hist_final_size(model = "Unif", N = 100, betas = c(0.005, 0.005), d = 10, gamma = 0.29, nsims = 10000, xlim = 50, ylim = 10)
+
+```
+
+Finally, generate the chosen epidemic and save the results
+
+```{r Generate epidemic 4}
+
+set.seed(13)
+
+# Generate a distance matrix
+   spatial <- EpidemicR::Dist_mat_unif(N=100, xlim = 50, ylim = 10)
+   xy.coords <- spatial[[1]]
+   distance_mat <- spatial[[2]]
+
+# Generate an associated infection rate matrix
+   params <- c("beta1" = 0.1, "beta2" = 0, "gamma" = 0.15, "d" = 2.5, "p" = 0, "llh" = NA)
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(params["beta1"], params["beta2"]), params["d"])
+   
+# Generate a simulated epidemic
+   Hetero_sim <- EpidemicR::GSE_sim(N = 100, beta.mat = rate_mat, gamma = 0.15)
+   
+# Total number of infected
+   n_I = sum(Hetero_sim[,2] < Inf)
+  
+# Who is infected
+   inf.ids <- which(Hetero_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Hetero_sim[,2]
+
+# Removal times
+  rem.times <- Hetero_sim[,3]
+
+# Calculate Likelihood
+  params["llh"] <- EpidemicR::log_likelihood(inf.times, rem.times, rate_mat)
+  
+# Plot the epidemic
+  pdf("../Data/HeteroRect/epi_plot.pdf") 
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Hetero_sim, init.inf = c(1))
+  while (!is.null(dev.list()))  dev.off() # save plot
+```
+
+```{r Save the Hetero Rect epidemic}
+
+epi_list = list(spatial, params, rate_mat, Hetero_sim)
+
+saveRDS(epi_list, file="../Data/HeteroRect/epi_list.RData")
+
+```
+
+
+
+
+
+
+
+# Heterogeneous Epidemic in a Big Population (Uniform spatial distribution)
+
+The case where individuals are arranged randomly on a grid, and individuals within Euclidean distance $d$ of each other make contact at rate $\beta_1$, otherwise at rate $\beta_2$. In this case the population is 500 times larger.
+
+First identify a parameter set with an modal total number infected of around 25% of the population.
+
+```{r Identify a parameter set for Heterogeneous (Big) epidemic}
+
+set.seed(1)
+
+betas = seq(0.003, 0.007, 0.0005)
+
+ps = seq(0.01, 0.05, 0.01)
+
+gammas = seq(0.2, 0.4, 0.02)
+
+ds = seq(1, 5, 1)
+
+parameter_options = Identify_parameter_set(model = "Unif", N = 50000, betas = betas, ps = ps, ds = ds, gammas = gammas, nsims = 1000, xlim = 20, ylim = 20)
+
+parameter_options
+
+```
+
+In this case we choose $\beta_1 = 0.007$, $\beta_2 = 0.00007$, $d = 5$, and $\gamma = 0.11$.
+
+The following histograms show the distribution of final sizes for this parameter set, and the table provides some seeds that generate an epidemic of the desired size.
+
+```{r Plot histograms for Heterogeneous (Big) epidemic}
+
+Hist_final_size(model = "Unif", N = 500, betas = c(0.007, 0.00007), d = 5, gamma = 0.11, nsims = 10000, xlim = 20, ylim = 20)
+
+```
+
+Finally, generate the chosen epidemic and save the results
+
+```{r Generate epidemic 5}
+
+set.seed(295)
+
+# Generate a distance matrix
+   spatial <- EpidemicR::Dist_mat_unif(N=50000, xlim = 20, ylim = 20)
+   xy.coords <- spatial[[1]]
+   distance_mat <- spatial[[2]]
+
+# Generate an associated infection rate matrix
+   params <- c("beta1" = 0.007, "beta2" = 0.00007, "gamma" = 0.11, "d" = 5, "p" = 0.01, "llh" = NA)
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(params["beta1"], params["beta2"]), params["d"])
+   
+# Generate a simulated epidemic
+   Hetero_sim <- EpidemicR::GSE_sim(N = 100, beta.mat = rate_mat, gamma = 0.11)
+   
+# Total number of infected
+   n_I = sum(Hetero_sim[,2] < Inf)
+  
+# Who is infected
+   inf.ids <- which(Hetero_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Hetero_sim[,2]
+
+# Removal times
+  rem.times <- Hetero_sim[,3]
+
+# Calculate Likelihood
+  params["llh"] <- EpidemicR::log_likelihood(inf.times, rem.times, rate_mat)
+  
+# Plot the epidemic
+  pdf("../Data/HeteroBig/epi_plot.pdf") 
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Hetero_sim, init.inf = c(1))
+  while (!is.null(dev.list()))  dev.off() # save plot
+```
+
+```{r Save the Hetero Big epidemic}
+
+epi_list = list(spatial, params, rate_mat, Hetero_sim)
+
+saveRDS(epi_list, file="../Data/HeteroBig/epi_list.RData")
+
+```
+
+
+
+
+
+
+# Heterogeneous Epidemic (Clustered spatial distribution)
+
+
+The case where individuals are distributed using a cluster process. The poles of each cluster were distributed uniformly on a $20\times20$ plane, and the rest of the population were distributed evenly around each pole using an isotropic Gaussian distribution. Individuals within Euclidean distance $d$ of each other make contact at rate $\beta_1$, otherwise at rate $\beta_2$.
+
+First identify a parameter set with an modal total number infected of around 25% of the population.
+
+```{r Identify a parameter set for Heterogeneous (Clust) epidemic}
+
+set.seed(1)
+
+betas = seq(0.001, 0.007, 0.0005)
+
+ps = seq(0.01, 0.1, 0.01)
+
+gammas = seq(0.1, 0.4, 0.02)
+
+ds = seq(0.5, 5, 0.5)
+
+parameter_options = Identify_parameter_set(model = "Clust", N = 100, betas = betas, ps = ps, ds = ds, gammas = gammas, nsims = 1000, xlim = 20, ylim = 20, centres = 5, spread = 1)
+
+parameter_options
+
+```
+
+In this case we choose $\beta_1 = 0.007$, $\beta_2 = 0.00007$, $d = 5$, and $\gamma = 0.11$.
+
+The following histograms show the distribution of final sizes for this parameter set, and the table provides some seeds that generate an epidemic of the desired size.
+
+```{r Plot histograms for Heterogeneous (Clust) epidemic}
+
+Hist_final_size(model = "Clust", N = 100, betas = c(0.007, 0.00007), d = 5, gamma = 0.11, nsims = 10000, xlim = 20, ylim = 20, centres = 5, spread = 1)
+
+```
+
+Finally, generate the chosen epidemic and save the results
+
+```{r Generate epidemic 6}
+
+set.seed(295)
+
+# Generate a distance matrix
+   spatial <- EpidemicR::Dist_mat_clust(N=100, xlim = 20, ylim = 20, centres = 5, spread = 1)
+   xy.coords <- spatial[[1]]
+   distance_mat <- spatial[[2]]
+
+# Generate an associated infection rate matrix
+   params <- c("beta1" = 0.007, "beta2" = 0.00007, "gamma" = 0.11, "d" = 5, "p" = 0.01, "llh" = NA)
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(params["beta1"], params["beta2"]), params["d"])
+   
+# Generate a simulated epidemic
+   Hetero_sim <- EpidemicR::GSE_sim(N = 100, beta.mat = rate_mat, gamma = 0.11)
+   
+# Total number of infected
+   n_I = sum(Hetero_sim[,2] < Inf)
+  
+# Who is infected
+   inf.ids <- which(Hetero_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Hetero_sim[,2]
+
+# Removal times
+  rem.times <- Hetero_sim[,3]
+
+# Calculate Likelihood
+  params["llh"] <- EpidemicR::log_likelihood(inf.times, rem.times, rate_mat)
+  
+# Plot the epidemic
+  pdf("../Data/HeteroClust/epi_plot.pdf") 
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Hetero_sim, init.inf = c(1))
+  while (!is.null(dev.list()))  dev.off() # save plot
+```
+
+```{r Save the Hetero Clust epidemic}
+
+epi_list = list(spatial, params, rate_mat, Hetero_sim)
+
+saveRDS(epi_list, file="../Data/HeteroClust/epi_list.RData")
+
+```
+
+
+
+
+
+
+
+# Heterogeneous Epidemic (Lattice spatial distribution)
+
+The case where half the population are arranged on a lattice. Each individual then has a `buddy' which is placed around them using an isotropic Gaussian distribution, and individuals within Euclidean distance $d$ of each other make contact at rate $\beta_1$, otherwise at rate $\beta_2$.
+
+First identify a parameter set with an modal total number infected of around 25% of the population.
+
+```{r Identify a parameter set for Heterogeneous (Latt) epidemic}
+
+set.seed(1)
+
+betas = seq(0.001, 0.007, 0.0005)
+
+ps = seq(0.01, 0.1, 0.01)
+
+gammas = seq(0.1, 0.4, 0.02)
+
+ds = seq(0.5, 5, 0.5)
+
+parameter_options = Identify_parameter_set(model = "Latt", N = 100, betas = betas, ps = ps, ds = ds, gammas = gammas, nsims = 1000, xlim = 20, ylim = 20, buddy = TRUE)
+
+parameter_options
+
+```
+
+In this case we choose $\beta_1 = 0.007$, $\beta_2 = 0.00007$, $d = 5$, and $\gamma = 0.11$.
+
+The following histograms show the distribution of final sizes for this parameter set, and the table provides some seeds that generate an epidemic of the desired size.
+
+```{r Plot histograms for Heterogeneous (Latt) epidemic}
+
+Hist_final_size(model = "Latt", N = 200, betas = c(0.007, 0.00007), d = 5, gamma = 0.11, nsims = 10000, xlim = 20, ylim = 20, nrow = 10, buddy = TRUE)
+
+```
+
+Finally, generate the chosen epidemic and save the results
+
+```{r Generate epidemic 7}
+
+set.seed(295)
+
+# Generate a distance matrix
+   spatial <- Dist_mat_latt(N = 200, nrow = 10, xlim = 20, ylim = 20, buddy = TRUE)
+   xy.coords <- spatial[[1]]
+   distance_mat <- spatial[[2]]
+
+# Generate an associated infection rate matrix
+   params <- c("beta1" = 0.007, "beta2" = 0.00007, "gamma" = 0.11, "d" = 5, "p" = 0.01, "llh" = NA)
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(params["beta1"], params["beta2"]), params["d"])
+   
+# Generate a simulated epidemic
+   Hetero_sim <- EpidemicR::GSE_sim(N = 200, beta.mat = rate_mat, gamma = 0.11)
+   
+# Total number of infected
+   n_I = sum(Hetero_sim[,2] < Inf)
+  
+# Who is infected
+   inf.ids <- which(Hetero_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Hetero_sim[,2]
+
+# Removal times
+  rem.times <- Hetero_sim[,3]
+
+# Calculate Likelihood
+  params["llh"] <- EpidemicR::log_likelihood(inf.times, rem.times, rate_mat)
+  
+# Plot the epidemic
+  pdf("../Data/HeteroLatt/epi_plot.pdf") 
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Hetero_sim, init.inf = c(1))
+  while (!is.null(dev.list()))  dev.off() # save plot
+```
+
+```{r Save the Hetero Latt epidemic}
+
+epi_list = list(spatial, params, rate_mat, Hetero_sim)
+
+saveRDS(epi_list, file="../Data/HeteroLatt/epi_list.RData")
+
+```
+
+
+
+
+
+# Heterogeneous Epidemic (Edge spatial distribution)
+
+The case where individuals are distributed in evenly spaced clusters along the left and right edges of the plane, with a large space between the left and right clusters, and individuals within Euclidean distance $d$ of each other make contact at rate $\beta_1$, otherwise at rate $\beta_2$.
+
+First identify a parameter set with an modal total number infected of around 25% of the population.
+
+```{r Identify a parameter set for Heterogeneous (Edge) epidemic}
+
+set.seed(1)
+
+betas = seq(0.001, 0.007, 0.0005)
+
+ps = seq(0.01, 0.1, 0.01)
+
+gammas = seq(0.1, 0.4, 0.02)
+
+ds = seq(0.5, 5, 0.5)
+
+parameter_options = Identify_parameter_set(model = "Edge", N = 100, betas = betas, ps = ps, ds = ds, gammas = gammas, nsims = 1000, xlim = 20, ylim = 20, clusters = 10)
+
+parameter_options
+
+```
+
+In this case we choose $\beta_1 = 0.007$, $\beta_2 = 0.00007$, $d = 5$, and $\gamma = 0.11$.
+
+The following histograms show the distribution of final sizes for this parameter set, and the table provides some seeds that generate an epidemic of the desired size.
+
+```{r Plot histograms for Heterogeneous (Edge) epidemic}
+
+Hist_final_size(model = "Edge", N = 100, betas = c(0.007, 0.00007), d = 5, gamma = 0.11, nsims = 10000, xlim = 20, ylim = 20, clusters = 10)
+
+```
+
+Finally, generate the chosen epidemic and save the results
+
+```{r Generate epidemic 8}
+
+set.seed(719)
+
+# Generate a distance matrix
+   spatial <- EpidemicR::Dist_mat_edge(N=100, xlim = 20, ylim = 20, clusters = 10)
+   xy.coords <- spatial[[1]]
+   distance_mat <- spatial[[2]]
+
+# Generate an associated infection rate matrix
+   params <- c("beta1" = 0.007, "beta2" = 0.00007, "gamma" = 0.11, "d" = 5, "p" = 0.01, "llh" = NA)
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(params["beta1"], params["beta2"]), params["d"])
+   
+# Generate a simulated epidemic
+   Hetero_sim <- EpidemicR::GSE_sim(N = 100, beta.mat = rate_mat, gamma = 0.11)
+   
+# Total number of infected
+   n_I = sum(Hetero_sim[,2] < Inf)
+  
+# Who is infected
+   inf.ids <- which(Hetero_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Hetero_sim[,2]
+
+# Removal times
+  rem.times <- Hetero_sim[,3]
+
+# Calculate Likelihood
+  params["llh"] <- EpidemicR::log_likelihood(inf.times, rem.times, rate_mat)
+  
+# Plot the epidemic
+  pdf("../Data/HeteroEdge/epi_plot.pdf") 
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Hetero_sim, init.inf = c(1))
+  while (!is.null(dev.list()))  dev.off() # save plot
+```
+
+```{r Save the Hetero Edge epidemic}
+
+epi_list = list(spatial, params, rate_mat, Hetero_sim)
+
+saveRDS(epi_list, file="../Data/HeteroEdge/epi_list.RData")
+
+```
+
+
+
+
+# Heterogeneous Epidemic (Lines spatial distribution)
+
+The case where individuals are distributed on a lattice where the distance between each successive row and column is increasing, and individuals within Euclidean distance $d$ of each other make contact at rate $\beta_1$, otherwise at rate $\beta_2$.
+
+First identify a parameter set with an modal total number infected of around 25% of the population.
+
+```{r Identify a parameter set for Heterogeneous (Lines) epidemic}
+
+set.seed(1)
+
+betas = seq(0.001, 0.007, 0.0005)
+
+ps = seq(0.01, 0.1, 0.01)
+
+gammas = seq(0.1, 0.4, 0.02)
+
+ds = seq(0.5, 5, 0.5)
+
+parameter_options = Identify_parameter_set(model = "Lines", N = 100, betas = betas, ps = ps, ds = ds, gammas = gammas, nsims = 1000)
+
+parameter_options
+
+```
+
+In this case we choose $\beta_1 = 0.007$, $\beta_2 = 0.00007$, $d = 5$, and $\gamma = 0.11$.
+
+The following histograms show the distribution of final sizes for this parameter set, and the table provides some seeds that generate an epidemic of the desired size.
+
+```{r Plot histograms for Heterogeneous (Unif) epidemic}
+
+Hist_final_size(model = "Lines", N = 100, betas = c(0.007, 0.00007), d = 5, gamma = 0.11, nsims = 10000)
+
+```
+
+Finally, generate the chosen epidemic and save the results
+
+```{r Generate epidemic 9}
+
+set.seed(295)
+
+# Generate a distance matrix
+   spatial <- EpidemicR::Dist_mat_lines(N=100)
+   xy.coords <- spatial[[1]]
+   distance_mat <- spatial[[2]]
+
+# Generate an associated infection rate matrix
+   params <- c("beta1" = 0.007, "beta2" = 0.00007, "gamma" = 0.11, "d" = 5, "p" = 0.01, "llh" = NA)
+   rate_mat <- EpidemicR::Beta_mat_form(distance_mat, c(params["beta1"], params["beta2"]), params["d"])
+   
+# Generate a simulated epidemic
+   Hetero_sim <- EpidemicR::GSE_sim(N = 100, beta.mat = rate_mat, gamma = 0.11)
+   
+# Total number of infected
+   n_I = sum(Hetero_sim[,2] < Inf)
+  
+# Who is infected
+   inf.ids <- which(Hetero_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Hetero_sim[,2]
+
+# Removal times
+  rem.times <- Hetero_sim[,3]
+
+# Calculate Likelihood
+  params["llh"] <- EpidemicR::log_likelihood(inf.times, rem.times, rate_mat)
+  
+# Plot the epidemic
+  pdf("../Data/HeteroLines/epi_plot.pdf") 
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Hetero_sim, init.inf = c(1))
+  while (!is.null(dev.list()))  dev.off() # save plot
+```
+
+```{r Save the Hetero Edge epidemic}
+
+epi_list = list(spatial, params, rate_mat, Hetero_sim)
+
+saveRDS(epi_list, file="../Data/HeteroLines/epi_list.RData")
+
+```

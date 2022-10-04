@@ -1,0 +1,241 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+title: "Unpaired Homogeneous General Stochastic Epidemic Inference"
+author: "Benjamen Simon"
+date: "September 2022"
+knit: (function(inputFile, encoding) { 
+          rmarkdown::render(
+            inputFile,
+            encoding = encoding, 
+            output_dir = "../Reports") 
+            })
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{enumerate}
+  - \usepackage{bm}
+  - \usepackage[T1]{fontenc}
+---
+
+```{r setup, include=FALSE}
+
+# Rmarkdown settings
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, eval= TRUE, message = FALSE, cache.path = "Caches/", fig.path = "Figures/HeteroUnif/")
+
+# Default to non-scientific notation
+options(scipen=999)
+
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+```{r Packages}
+
+  ## Data manipulation
+  library(tidyverse)
+
+  ## Plotting
+  library(ggplot2)
+  library(ggcorrplot)
+  source("VisualisationFunctions.R")
+
+  ## MCMC Diagnostics
+  library(coda)
+
+  ## Epidemics
+  library(EpidemicR) # For simulating and making inference on GSE epidemics
+
+  ## Write up
+  library(xtable)
+
+```
+
+# Load in the epidemic
+
+The epidemic we have simulated has a modal number of infected individuals as roughly 25% of the population
+
+```{r Load epidemic}
+
+epi_list <- readRDS(file="../Data/HeteroUnif/epi_list.RData")
+
+# Distance matrix
+  spatial <- epi_list[[1]]
+  xy.coords <- spatial[[1]]
+  distance_mat <- spatial[[2]]
+
+# Associated infection rate matrix
+  params <- epi_list[[2]]
+  rate_mat <- epi_list[[3]]
+   
+# Simulated epidemic
+  Homo_sim <- epi_list[[4]]
+
+# Total number of infected
+  n_I = sum(Homo_sim[,2] < Inf)
+  
+# Who is infected
+  inf.ids <- which(Homo_sim[,2] < Inf)
+
+# Infection times
+  inf.times <- Homo_sim[,2]
+
+# Removal times
+  rem.times <- Homo_sim[,3]
+  
+# Plot the epidemic
+  epi_plot = EpidemicR::Plot_epidemic(xy.coords, Homo_sim, init.inf = c(1))
+
+```
+
+
+
+
+# Making inference (Base)
+
+We now make inference treating $\beta_1$ and $\beta_2$ as independent parameters.
+
+```{r Performing analysis 1}
+
+set.seed(1105)
+
+## Run the algorithm
+
+start.time <- Sys.time()
+
+res.list_one <- MCMC(N.its = 100000, N = 100, inf.ids, rem.times, distance_mat, 
+                     lambda.b1 = 0.001, nu.b1 = 1, lambda.b2 = 0.001, nu.b2 = 1, lambda.g = 0.001 , nu.g = 1,
+                     inc.beta1 = list(NA, T), inc.beta2 = list(NA, T), inc.dist = list(NA, T),
+                     inc.inf.times = list(NA, T), inc.gamma = list(NA, T),
+                     d.upper = 15, sigmab1 = 1, sigmab2 = 5, sigmad = 0.04, infupdate = 5)
+
+res_one <- res.list_one[[1]]
+
+end.time <- Sys.time()
+
+```
+
+```{r Summarise the results 1}
+
+## Summarise the results
+
+summary(res_one[-(1:5000), 2:5])
+
+Avg_acc_probs(res.list_one, F)
+
+```
+
+
+
+```{r Plot the results 1}
+
+## Plot the results
+
+trace_plot_betas_1 = gg_trace_plot_betas(res_one, params, 10000, c(20000, 0.025, 18000, 0.0013), c(0, 0.03, 0, 0.0015))
+
+trace_plot_gd_1 = gg_trace_plot_gd(res_one, params, 10000, c(3000, 0.025, 17000, 3), c(0.01, 0.25, 2.5, 7))
+
+# aaa = gg_trace_plot_bp(res_one, params, 10000, c(20000, 0.025, 18000, 0.25), c(0, 0.03, 0, 0.3))
+
+hist_plot_1 = gg_hist_plot(res_one, params, 10000, c(0.02, 90, 0.001, 1500, 0.2, 8, 8, 0.4), c(0, 0.03, 0, 0.0017, 0, 0.35, 2, 12))
+
+## Save the results
+
+ggsave(filename = "../Visualisation/HeteroUnif/trace_betas.png", plot = trace_plot_betas_1, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/HeteroUnif/trace_gd.png", plot = trace_plot_gd_1, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/HeteroUnif/hist_plot.png", plot = hist_plot_1, width = 10, height = 8)
+
+
+```
+
+The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
+
+The algorithm estimates the mean, median, and quartiles of $\beta_1$ to be `r mean(res_one[-(1:5000),2])` (`r quantile(res_one[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta_1 =$  `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res_one[,2]))`. 
+
+The algorithm estimates the mean, median, and quartiles of $\beta_2$ to be `r mean(res_one[-(1:5000),3])` (`r quantile(res_one[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$  `r params[2]`, with an effective sample size of `r round(coda::effectiveSize(res_one[,3]))`. 
+
+It estimates the mean, median, and quartiles of $\gamma$ to be `r mean(res_one[-(1:5000),3])` (`r quantile(res_one[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\gamma =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res_one[,3]))`.
+
+It estimates the mean, median, and quartiles of $d$ to be `r mean(res_one[-(1:5000),4])` (`r quantile(res_one[-(1:5000),4], probs = c(.25, .5, .75))`) compared to the true values of $d =$ `r params[4]`, with an effective sample size of `r round(coda::effectiveSize(res_one[,4]))`.
+
+
+
+# Making inference (Reparameterisation)
+
+We now rerun the analysis under a reparameterised model in order to see if this has any effect on our ability to make efficient inference.
+
+```{r Performing analysis reparam}
+
+set.seed(1106)
+
+## Run the algorithm
+
+start.time <- Sys.time()
+
+res.list.reparam_one <- MCMC_reparam(N.its = 100000, N = 100, inf.ids, rem.times, distance_mat, 
+                     lambda.b1 = 0.001, nu.b1 = 1, lambda.g = 0.001 , nu.g = 1,
+                     inc.beta1 = list(NA, T), inc.p = list(NA, T), inc.dist = list(NA, T),
+                     inc.inf.times = list(NA, T), inc.gamma = list(NA, T),
+                     d.upper = 15, sigmap = 0.01, sigmad = 0.1, infupdate = 2)
+
+res.reparam_one <- res.list.reparam_one[[1]]
+
+end.time <- Sys.time()
+
+```
+
+```{r Summarise the results reparam 1}
+
+## Summarise the results
+
+summary(res.reparam_one[-(1:5000), 2:5])
+
+Avg_acc_probs(res.list.reparam_one, T)
+
+```
+
+
+
+```{r Plot the results reparam 1}
+
+## Plot the results
+
+trace_plot_betas_reparam_1 = gg_trace_plot_betas(res.reparam_one, params, 10000, c(23000, 0.025, 23000, 0.0013), c(0, 0.03, 0, 0.0015))
+
+trace_plot_gd_reparam_1 = gg_trace_plot_gd(res.reparam_one, params, 10000, c(3000, 0.025, 20000, 3), c(0.01, 0.25, 2.5, 7))
+
+trace_plot_bp_reparam_1 = gg_trace_plot_bp(res.reparam_one, params, 10000, c(23000, 0.025, 27000, 0.175), c(0, 0.03, 0, 0.2))
+
+hist_plot_betas_reparam_1 = gg_hist_plot(res.reparam_one, params, 10000, c(0.0175, 90, 0.001, 1500, 0.2, 8, 8, 0.4), c(0, 0.0225, 0, 0.00125, 0, 0.25, 2, 10))
+
+hist_plot_bp_reparam_1 = gg_hist_plot_reparam(res.reparam_one, params, 10000, c(0.0175, 100, 0.1, 10, 0.2, 8, 8, 0.4), c(0, 0.0225, 0, 0.15, 0, 0.25, 2, 10))
+
+## Save the results
+
+ggsave(filename = "../Visualisation/HeteroUnif/trace_betas_reparam.png", plot = trace_plot_betas_reparam_1, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/HeteroUnif/trace_gd_reparam.png", plot = trace_plot_gd_reparam_1, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/HeteroUnif/trace_bp_reparam.png", plot = trace_plot_bp_reparam_1, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/HeteroUnif/hist_plot_betas_reparam.png", plot = hist_plot_betas_reparam_1, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/HeteroUnif/hist_plot_bp_reparam.png", plot = hist_plot_bp_reparam_1, width = 10, height = 8)
+
+```
+
+The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
+
+The algorithm estimates the mean, median, and quartiles of $\beta_1$ to be `r mean(res.reparam_one[-(1:5000),2])` (`r quantile(res.reparam_one[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta_1 =$  `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res.reparam_one[,2]))`. 
+
+The algorithm estimates the mean, median, and quartiles of $\beta_2$ to be `r mean(res.reparam_one[-(1:5000),3])` (`r quantile(res.reparam_one[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$  `r params[2]`, with an effective sample size of `r round(coda::effectiveSize(res.reparam_one[,3]))`. 
+
+It estimates the mean, median, and quartiles of $\gamma$ to be `r mean(res.reparam_one[-(1:5000),3])` (`r quantile(res.reparam_one[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\gamma =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res.reparam_one[,3]))`.
+
+It estimates the mean, median, and quartiles of $d$ to be `r mean(res.reparam_one[-(1:5000),4])` (`r quantile(res.reparam_one[-(1:5000),4], probs = c(.25, .5, .75))`) compared to the true values of $d =$ `r params[4]`, with an effective sample size of `r round(coda::effectiveSize(res.reparam_one[,4]))`.
+
+
+
