@@ -2,7 +2,7 @@
 output:
   pdf_document: default
   html_document: default
-title: "Unpaired Homogeneous General Stochastic Epidemic Inference"
+title: "Heterogeneous General Stochastic Epidemic Inference"
 author: "Benjamen Simon"
 date: "September 2022"
 knit: (function(inputFile, encoding) { 
@@ -40,6 +40,8 @@ options(dplyr.summarise.inform = FALSE)
   library(ggplot2)
   library(ggcorrplot)
   source("VisualisationFunctions.R")
+  library(plotMCMC) # autocorrelation plots and other diagnostic plots
+
 
   ## MCMC Diagnostics
   library(coda)
@@ -86,8 +88,71 @@ epi_list <- readRDS(file="../Data/HeteroUnif/epi_list.RData")
   
 # Plot the epidemic
   epi_plot = EpidemicR::Plot_epidemic(xy.coords, Homo_sim, init.inf = c(1))
+  
+  epi_curve_plot = epidemic_curves_plot(inf.times, rem.times, inf.ids)
+  epi_curve_plot
 
 ```
+```{r}
+
+  png("simulateddataplane.png", width = 6, height = 6, units = "in", res = 300)
+  EpidemicR::Plot_epidemic(xy.coords, Homo_sim, init.inf = c(1))
+  dev.off()
+  
+```
+
+```{r}
+# Step 2: Define distance thresholds
+thresholds <- c(1, 3, 5, 7, 10, 12, 15, 20)
+
+# Step 3: Function to calculate proportion within each threshold
+calculate_proportion <- function(threshold, distance_mat) {
+  # Exclude diagonal and upper triangle (duplicates) using lower.tri
+  within_threshold <- sum(distance_mat[lower.tri(distance_mat)] <= threshold)
+  total_pairs <- sum(lower.tri(distance_mat))
+
+  proportion_within_threshold <- within_threshold / total_pairs *100
+  return(proportion_within_threshold)
+}
+
+# Step 4: Apply the function for each threshold
+proportions <- sapply(thresholds, function(x) calculate_proportion(x, distance_mat))
+
+# Step 5: Display or use the results
+result <- data.frame(Threshold = thresholds, Proportion = proportions)
+print(result)
+```
+
+
+```{r}
+# Step 2: Define distance thresholds
+thresholds <- c(1, 3, 5, 7, 10, 12, 15, 20)
+
+# Step 3: Function to calculate proportion within each threshold
+calculate_proportion <- function(threshold, distance_mat, inf.ids) {
+  # Exclude diagonal and upper triangle (duplicates) using lower.tri
+  marked_distances <- distance_mat[inf.ids, inf.ids]
+  within_threshold <- sum(marked_distances[lower.tri(marked_distances)] <= threshold)
+  total_pairs <- sum(lower.tri(marked_distances))
+  
+  
+
+  proportion_within_threshold <- within_threshold / total_pairs *100
+  return(proportion_within_threshold)
+}
+
+# Step 4: Apply the function for each threshold
+proportions <- sapply(thresholds, function(x) calculate_proportion(x, distance_mat, inf.ids))
+
+# Step 5: Display or use the results
+result <- data.frame(Threshold = thresholds, Proportion = proportions)
+print(result)
+
+```
+
+
+
+
 
 
 
@@ -105,16 +170,38 @@ set.seed(1105)
 start.time <- Sys.time()
 
 res.list_one <- MCMC(N.its = 100000, N = 100, inf.ids, rem.times, distance_mat, 
-                     lambda.b1 = 0.001, nu.b1 = 1, lambda.b2 = 0.001, nu.b2 = 1, lambda.g = 0.001 , nu.g = 1,
-                     inc.beta1 = list(NA, T), inc.beta2 = list(NA, T), inc.dist = list(NA, T),
-                     inc.inf.times = list(NA, T), inc.gamma = list(NA, T),
-                     d.upper = 15, sigmab1 = 1, sigmab2 = 5, sigmad = 0.04, infupdate = 5)
+                     lambda.b1 = 1, nu.b1 = 1, lambda.b2 = 1, nu.b2 = 1, lambda.g = 1 , nu.g = 1,
+                     inc.beta1 = list(0.007, T), inc.beta2 = list(0.00007, T), inc.dist = list(5, T),
+                     inc.inf.times = list(NA, T), inc.gamma = list(0.11, T),
+                     d.upper = 15, sigmab1 = 0.5, sigmab2 = 1.2, sigmad = 0.2, infupdate = 2)
 
 res_one <- res.list_one[[1]]
 
 end.time <- Sys.time()
 
+print(c("Total Run Time:", end.time - start.time))
+
 ```
+```{r}
+coda::effectiveSize(res_one)
+
+apply(res_one, 2, function(column) {
+  quantiles <- quantile(column, c(0.025, 0.975))
+  rounded_quantiles <- signif(quantiles, digits = 3)  # Round to 3 significant figures
+  return(rounded_quantiles)
+})
+
+
+apply(res_one[ , ], 2, function(column) {
+  std_dev <- sd(column)  # Calculate standard deviation
+  rounded_std_dev <- signif(std_dev, digits = 3)  # Round to 3 significant figures
+  return(rounded_std_dev)
+})
+
+```
+
+
+
 
 ```{r Summarise the results 1}
 
@@ -127,29 +214,95 @@ Avg_acc_probs(res.list_one, F)
 ```
 
 
+```{r}
+
+hex_b1_gamma_1 = gg_hex_plot_beta1_gamma(res_one[-(1:5000),], params_true, c(0.08,0.25,  0.08,0.22,  0.08,0.04,  0.08,0.01), c(0, 0.091), c(0, 0.26))
+
+hex_b2_gamma_1 = gg_hex_plot_beta2_gamma(res_one[-(1:5000),], params_true, c(0.0019,0.25,  0.0019,0.22,  0.0019,0.04,  0.0019,0.01), c(0, 0.0022), c(0, 0.26))
+
+hex_b1_b2_1 = gg_hex_plot_beta1_beta2(res_one[-(1:5000),], params_true, c(0.036,0.0017,  0.075,0.0017,  0.035,0.0019,  0.075,0.0019), c(0, 0.091), c(0, 0.0019))
+
+hex_b1_d_1 = gg_hex_plot_beta1_d(res_one[-(1:5000),], params_true, c(0.036,7.5,  0.075,7.5,  0.035,6.5,  0.075,6.5), c(0, 0.091), c(1.35, 8))
+
+hex_b2_d_1 = gg_hex_plot_beta2_d(res_one[-(1:5000),], params_true, c(0.00165,8,  0.00165,7.25,  0.0008,8,  0.0008,7.25), c(0, 0.0019), c(1.35, 8))
+
+hex_d_gamma_1 = gg_hex_plot_d_gamma(res_one[-(1:5000),], params_true, c(1.7,0,  3.2,0,  5,0,  7,0), c(1.35, 8), c(0, 0.26))
+
+
+ggsave(filename = "../Visualisation/HeteroUnif/hex_b1_gamma.png", plot = hex_b1_gamma_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/hex_b2_gamma.png", plot = hex_b2_gamma_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/hex_b1_b2.png", plot = hex_b1_b2_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/hex_b1_d.png", plot = hex_b1_d_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/hex_b2_d.png", plot = hex_b2_d_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/hex_d_gamma.png", plot = hex_d_gamma_1, width = 10, height = 8)
+
+```
+
+
+
+```{r}
+
+contour_b1_gamma_1 = gg_contour_plot_b1_gamma(res_one, params, 10000, c(0, 0.04), c(0, 0.175))
+
+contour_b2_gamma_1 = gg_contour_plot_b2_gamma(res_one, params, 10000, c(0, 0.0022), c(0, 0.175))
+
+contour_b1_b2_1 = gg_contour_plot_b1_b2(res_one, params, 10000, c(0, 0.015), c(0, 0.0019))
+
+contour_b1_d_1 = gg_contour_plot_b1_d(res_one, params, 10000, c(0, 0.015), c(3, 6.25))
+
+contour_b2_d_1 = gg_contour_plot_b2_d(res_one, params, 10000, c(0, 0.0019), c(1.35, 6.25))
+
+contour_d_gamma_1 = gg_contour_plot_d_gamma(res_one, params, 10000, c(1.35, 6.25), c(0, 0.26))
+
+
+ggsave(filename = "../Visualisation/HeteroUnif/contour_b1_gamma.png", plot = contour_b1_gamma_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/contour_b2_gamma.png", plot = contour_b2_gamma_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/contour_b1_b2.png", plot = contour_b1_b2_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/contour_b1_d.png", plot = contour_b1_d_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/contour_b2_d.png", plot = contour_b2_d_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/contour_d_gamma.png", plot = contour_d_gamma_1, width = 10, height = 8)
+
+```
+
+
+
 
 ```{r Plot the results 1}
 
 ## Plot the results
 
-trace_plot_betas_1 = gg_trace_plot_betas(res_one, params, 10000, c(20000, 0.025, 18000, 0.0013), c(0, 0.03, 0, 0.0015))
+trace_plot_betas_1 = gg_trace_plot_betas(res_one, params, 10000, c(5000, 0.025, 7000, 0.0013), c(0, 0.03, 0, 0.0015))
 
-trace_plot_gd_1 = gg_trace_plot_gd(res_one, params, 10000, c(3000, 0.025, 17000, 3), c(0.01, 0.25, 2.5, 7))
+trace_plot_gammad_1 = gg_trace_plot_gammad(res_one, params, 10000, c(3000, 0.025, 3000, 3), c(0.01, 0.25, 2.5, 7))
 
 # aaa = gg_trace_plot_bp(res_one, params, 10000, c(20000, 0.025, 18000, 0.25), c(0, 0.03, 0, 0.3))
 
-hist_plot_1 = gg_hist_plot(res_one, params, 10000, c(0.02, 90, 0.001, 1500, 0.2, 8, 8, 0.4), c(0, 0.03, 0, 0.0017, 0, 0.35, 2, 12))
+hist_plot_1 = gg_hist_plot(res_one, params, 10000, c(0.02, 90, 0.001, 1500, 0.2, 8, 8, 0.4), c(0, 0.03, 0, 0.0014, 0, 0.25, 2, 9))
+
+hist_plot_w_prior_1 = gg_hist_plot_w_prior(res_one, params, 10000, c(1, 1, 1, 1, 1, 1, 0, 20), c(0.02, 90, 0.001, 1500, 0.2, 8, 8, 0.4), c(0, 0.03, 0, 0.0014, 0, 0.25, 2, 9))
+
 
 ## Save the results
 
 ggsave(filename = "../Visualisation/HeteroUnif/trace_betas.png", plot = trace_plot_betas_1, width = 10, height = 8)
 
-ggsave(filename = "../Visualisation/HeteroUnif/trace_gd.png", plot = trace_plot_gd_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/trace_gammad.png", plot = trace_plot_gammad_1, width = 10, height = 8)
 
 ggsave(filename = "../Visualisation/HeteroUnif/hist_plot.png", plot = hist_plot_1, width = 10, height = 8)
 
+ggsave(filename = "../Visualisation/HeteroUnif/hist_plot_w_prior.png", plot = hist_plot_w_prior_1, width = 10, height = 8)
+
 
 ```
+
+```{r}
+
+png("../Visualisation/HeteroUnif/autocorr.png", width=1000, height=800)
+plotAuto(res_one[, c(2,3,4,5)], lag.max=50)
+dev.off()
+
+```
+
 
 The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
 
@@ -176,16 +329,38 @@ set.seed(1106)
 start.time <- Sys.time()
 
 res.list.reparam_one <- MCMC_reparam(N.its = 100000, N = 100, inf.ids, rem.times, distance_mat, 
-                     lambda.b1 = 0.001, nu.b1 = 1, lambda.g = 0.001 , nu.g = 1,
-                     inc.beta1 = list(NA, T), inc.p = list(NA, T), inc.dist = list(NA, T),
-                     inc.inf.times = list(NA, T), inc.gamma = list(NA, T),
-                     d.upper = 15, sigmap = 0.01, sigmad = 0.1, infupdate = 2)
+                     lambda.b1 = 1, nu.b1 = 1, lambda.g = 1 , nu.g = 1,
+                     inc.beta1 = list(0.007, T), inc.p = list(0.00007, T), inc.dist = list(5, T),
+                     inc.inf.times = list(NA, T), inc.gamma = list(0.11, T),
+                     d.upper = 15, sigmap = 0.05, sigmad = 0.3, infupdate = 2)
 
 res.reparam_one <- res.list.reparam_one[[1]]
 
 end.time <- Sys.time()
 
+print(c("Total Run Time:", end.time - start.time))
+
 ```
+
+```{r}
+coda::effectiveSize(res.reparam_one)
+
+apply(res.reparam_one, 2, function(column) {
+  quantiles <- quantile(column, c(0.025, 0.975))
+  rounded_quantiles <- signif(quantiles, digits = 3)  # Round to 3 significant figures
+  return(rounded_quantiles)
+})
+
+
+apply(res.reparam_one[ , ], 2, function(column) {
+  std_dev <- sd(column)  # Calculate standard deviation
+  rounded_std_dev <- signif(std_dev, digits = 3)  # Round to 3 significant figures
+  return(rounded_std_dev)
+})
+
+
+```
+
 
 ```{r Summarise the results reparam 1}
 
@@ -197,6 +372,55 @@ Avg_acc_probs(res.list.reparam_one, T)
 
 ```
 
+```{r}
+
+hex_b1_gamma_reparam = gg_hex_plot_beta1_gamma(res.reparam_one[-(1:5000),], params_true, c(0.08,0.25,  0.08,0.22,  0.08,0.04,  0.08,0.01), c(0, 0.091), c(0, 0.26))
+
+hex_b2_gamma_reparam = gg_hex_plot_beta2_gamma(res.reparam_one[-(1:5000),], params_true, c(0.0019,0.25,  0.0019,0.22,  0.0019,0.04,  0.0019,0.01), c(0, 0.0022), c(0, 0.26))
+
+hex_b1_b2_reparam = gg_hex_plot_beta1_beta2(res.reparam_one[-(1:5000),], params_true, c(0.036,0.0017,  0.075,0.0017,  0.035,0.0019,  0.075,0.0019), c(0, 0.091), c(0, 0.0019))
+
+hex_b1_d_reparam = gg_hex_plot_beta1_d(res.reparam_one[-(1:5000),], params_true, c(0.036,7.5,  0.075,7.5,  0.035,6.5,  0.075,6.5), c(0, 0.091), c(1.35, 8))
+
+hex_b2_d_reparam = gg_hex_plot_beta2_d(res.reparam_one[-(1:5000),], params_true, c(0.00165,8,  0.00165,7.25,  0.0008,8,  0.0011,7.25), c(0, 0.0019), c(1.35, 8))
+
+hex_d_gamma_reparam = gg_hex_plot_d_gamma(res.reparam_one[-(1:5000),], params_true, c(1.7,0,  3.2,0,  5,0,  7,0), c(1.35, 8), c(0, 0.26))
+
+
+ggsave(filename = "../Visualisation/HeteroUnif/hex_b1_gamma_reparam.png", plot = hex_b1_gamma_reparam, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/hex_b2_gamma_reparam.png", plot = hex_b2_gamma_reparam, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/hex_b1_b2_reparam.png", plot = hex_b1_b2_reparam, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/hex_b1_d_reparam.png", plot = hex_b1_d_reparam, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/hex_b2_d_reparam.png", plot = hex_b2_d_reparam, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/hex_d_gamma_reparam.png", plot = hex_d_gamma_reparam, width = 10, height = 8)
+
+```
+
+
+
+```{r}
+
+contour_b1_gamma_reparam = gg_contour_plot_b1_gamma(res.reparam_one, params, 10000, c(0, 0.04), c(0, 0.175))
+
+contour_b2_gamma_reparam = gg_contour_plot_b2_gamma(res.reparam_one, params, 10000, c(0, 0.0022), c(0, 0.175))
+
+contour_b1_b2_reparam = gg_contour_plot_b1_b2(res.reparam_one, params, 10000, c(0, 0.015), c(0, 0.0019))
+
+contour_b1_d_reparam = gg_contour_plot_b1_d(res.reparam_one, params, 10000, c(0, 0.015), c(3, 6.25))
+
+contour_b2_d_reparam = gg_contour_plot_b2_d(res.reparam_one, params, 10000, c(0, 0.0019), c(4, 6.25))
+
+contour_d_gamma_reparam = gg_contour_plot_d_gamma(res.reparam_one, params, 10000, c(4, 6.25), c(0, 0.26))
+
+
+ggsave(filename = "../Visualisation/HeteroUnif/contour_b1_gamma_reparam.png", plot = contour_b1_gamma_reparam, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/contour_b2_gamma_reparam.png", plot = contour_b2_gamma_reparam, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/contour_b1_b2_reparam.png", plot = contour_b1_b2_reparam, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/contour_b1_d_reparam.png", plot = contour_b1_d_reparam, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/contour_b2_d_reparam.png", plot = contour_b2_d_reparam, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/contour_d_gamma_reparam.png", plot = contour_d_gamma_reparam, width = 10, height = 8)
+
+```
 
 
 ```{r Plot the results reparam 1}
@@ -205,25 +429,43 @@ Avg_acc_probs(res.list.reparam_one, T)
 
 trace_plot_betas_reparam_1 = gg_trace_plot_betas(res.reparam_one, params, 10000, c(23000, 0.025, 23000, 0.0013), c(0, 0.03, 0, 0.0015))
 
-trace_plot_gd_reparam_1 = gg_trace_plot_gd(res.reparam_one, params, 10000, c(3000, 0.025, 20000, 3), c(0.01, 0.25, 2.5, 7))
+trace_plot_gammad_reparam_1 = gg_trace_plot_gammad(res.reparam_one, params, 10000, c(3000, 0.025, 20000, 3), c(0.01, 0.25, 2.5, 7))
 
 trace_plot_bp_reparam_1 = gg_trace_plot_bp(res.reparam_one, params, 10000, c(23000, 0.025, 27000, 0.175), c(0, 0.03, 0, 0.2))
+
 
 hist_plot_betas_reparam_1 = gg_hist_plot(res.reparam_one, params, 10000, c(0.0175, 90, 0.001, 1500, 0.2, 8, 8, 0.4), c(0, 0.0225, 0, 0.00125, 0, 0.25, 2, 10))
 
 hist_plot_bp_reparam_1 = gg_hist_plot_reparam(res.reparam_one, params, 10000, c(0.0175, 100, 0.1, 10, 0.2, 8, 8, 0.4), c(0, 0.0225, 0, 0.15, 0, 0.25, 2, 10))
 
+
+hist_plot_w_prior_reparam = gg_hist_plot_w_prior(res.reparam_one, params, 10000, c(1, 1, 1, 1, 1, 1, 0, 20), c(0.0175, 90, 0.001, 1500, 0.2, 8, 8, 0.4), c(0, 0.0225, 0, 0.00125, 0, 0.25, 2, 10))
+
+hist_plot_bp_w_prior_reparam = gg_hist_plot_w_prior_reparam(res.reparam_one, params, 10000, c(1, 1, 0, 1, 1, 1, 0, 20), c(0.0175, 100, 0.1, 10, 0.2, 8, 8, 0.4), c(0, 0.0225, 0, 0.15, 0, 0.25, 2, 10))
+
 ## Save the results
 
 ggsave(filename = "../Visualisation/HeteroUnif/trace_betas_reparam.png", plot = trace_plot_betas_reparam_1, width = 10, height = 8)
 
-ggsave(filename = "../Visualisation/HeteroUnif/trace_gd_reparam.png", plot = trace_plot_gd_reparam_1, width = 10, height = 8)
+ggsave(filename = "../Visualisation/HeteroUnif/trace_gammad_reparam.png", plot = trace_plot_gammad_reparam_1, width = 10, height = 8)
 
 ggsave(filename = "../Visualisation/HeteroUnif/trace_bp_reparam.png", plot = trace_plot_bp_reparam_1, width = 10, height = 8)
 
 ggsave(filename = "../Visualisation/HeteroUnif/hist_plot_betas_reparam.png", plot = hist_plot_betas_reparam_1, width = 10, height = 8)
 
 ggsave(filename = "../Visualisation/HeteroUnif/hist_plot_bp_reparam.png", plot = hist_plot_bp_reparam_1, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/HeteroUnif/hist_plot_w_prior_reparam.png", plot = hist_plot_w_prior_reparam, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/HeteroUnif/hist_plot_bp_w_prior_reparam.png", plot = hist_plot_bp_w_prior_reparam, width = 10, height = 8)
+
+```
+
+```{r}
+
+png("../Visualisation/HeteroUnif/autocorr_reparam_2.png", width=1000, height=800)
+plotAuto(res.reparam_one[, c(2,3,4,5)], lag.max=50)
+dev.off()
 
 ```
 

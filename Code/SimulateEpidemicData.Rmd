@@ -148,6 +148,7 @@ Hist_final_size <- function(model, N, betas, gamma, d, nsims, ...){
     n_I[s] = sum(sim[,2] < Inf)/N * 100
     
     if(n_I[s] == 25){
+      
       valid_seeds[s] = s
     }
   }
@@ -203,9 +204,11 @@ The following histograms show the distribution of final sizes for this parameter
 
 ```{r Plot histograms for Homogeneous epidemic}
 
-Hist_final_size(model = "Unif", N = 100, betas = c(0.003, 0.003), d = 10, gamma = 0.23, nsims = 10000, xlim = 20, ylim = 20)
+Hist_final_size(model = "Unif", N = 100, betas = c(0.0023, 0.0023), d = 10, gamma = 0.18, nsims = 10000, xlim = 20, ylim = 20)
 
-Hist_final_size(model = "Unif", N = 100, betas = c(0.005, 0.005), d = 10, gamma = 0.29, nsims = 10000, xlim = 20, ylim = 20)
+# Hist_final_size(model = "Unif", N = 100, betas = c(0.003, 0.003), d = 10, gamma = 0.23, nsims = 10000, xlim = 20, ylim = 20)
+# 
+# Hist_final_size(model = "Unif", N = 100, betas = c(0.005, 0.005), d = 10, gamma = 0.29, nsims = 10000, xlim = 20, ylim = 20)
 
 ```
 
@@ -939,3 +942,158 @@ epi_list = list(spatial, params, rate_mat, Hetero_sim)
 saveRDS(epi_list, file="../Data/HeteroLines/epi_list.RData")
 
 ```
+
+
+
+
+
+
+# Homogeneous Epidemic (Chain Binomial construction)
+
+As a bonus we will generate a discrete time homogeneous epidemic using the Chain-Binomial construction:
+
+```{r Chain Binomial Simulator}
+
+p_exp <- function(I_t, N_t, beta){
+  p_exp_t = 1-exp(beta * - (I_t/N_t))
+  return(p_exp_t)
+}
+
+cbSIRsim <- function(S0, I0, R0, T, beta, gamma){
+
+  data = matrix(data = NA, nrow = 100, ncol = 3)
+  track = matrix(data = NA, nrow = 100, ncol = 3)
+
+  St = S0
+  It = I0
+  Rt = R0
+  Nt = St + It + Rt
+
+  p_rem = 1 - exp(-gamma)
+
+  for (t in 1:T){
+
+    p_exp_t = p_exp(It, Nt, beta)
+
+    
+    new_I = rbinom(1, St, p_exp_t)
+    new_R = rbinom(1, It, p_rem)
+
+    St = St - new_I
+    It = It + new_I - new_R
+    Rt = Rt + new_R
+    Nt = St + It + Rt
+
+    data[t, ] = c(St, It, Rt)
+    track[t, ] = c(new_I, new_R, p_exp_t)
+
+  }
+
+  return(list(data, track))
+}
+
+```
+
+```{r Identify Seed function}
+
+Hist_final_size_cb <- function(nsims, S0, I0, R0, T, beta, gamma){
+  
+  n_I = rep(NA, nsims)
+  
+  valid_seeds = array(NA, nsims)
+  
+  for(s in 1:nsims){
+    
+    set.seed(s)
+    
+    cb_results = cbSIRsim(S0, I0, R0, T, beta, gamma)
+
+    sim = cb_results[[1]]
+    events = cb_results[[2]]
+    
+    n_I[s] = sim[T, 3]
+    
+    if(n_I[s] == 25){
+      valid_seeds[s] = s
+    }
+  }
+  
+  print(head(na.omit(as.data.frame(valid_seeds))))
+
+  hist(n_I, breaks = 50)
+  abline(v = mean(n_I), # Add line for mean
+          col = "red",
+          lwd = 3)
+  text(x = mean(n_I)+ 11, # Add text for mean
+     y = mean(n_I) * nsims * 0.01,
+     paste("Mean =", mean(n_I)),
+     col = "red",
+     cex = 1)
+  abline(v = median(n_I),# Add line for median
+         col = "blue",
+         lwd = 3)
+  text(x = median(n_I)+ 9, # Add text for median
+     y = median(n_I) * nsims * 0.1,
+     paste("Median =", median(n_I)),
+     col = "blue",
+     cex = 1)
+}
+
+```
+
+```{r Identify Seed}
+
+S0 = 99
+I0 = 1
+R0 = 0
+T = 100
+beta = 0.11
+gamma = 0.10
+
+Hist_final_size_cb(100000, S0, I0, R0, T, beta, gamma)
+
+```
+
+
+
+```{r Generate Simulated Data}
+
+S0 = 99
+I0 = 1
+R0 = 0
+T = 100
+beta = 0.11
+gamma = 0.10
+
+set.seed(314)
+
+cb_res = cbSIRsim(S0, I0, R0, T, beta, gamma)
+
+cb_data = cb_res[[1]]
+cb_track = cb_res[[2]]
+
+plot(1:100, cb_data[,1], type = "l", col = "darkgreen", ylim = c(0, 100))
+  lines(1:100, cb_data[,2], type = "l", col = "red")
+  lines(1:100, cb_data[,3], type = "l", col = "blue")
+
+```
+
+```{r Save the Hetero Edge epidemic}
+
+epi_list = list(c(beta, gamma), cb_data, cb_track)
+
+saveRDS(epi_list, file="../Data/cbHomo/epi_list.RData")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+

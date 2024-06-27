@@ -38,3 +38,5 @@ Code/Caches/
 
 # R Environment Variables
 .Renviron
+
+Results/*

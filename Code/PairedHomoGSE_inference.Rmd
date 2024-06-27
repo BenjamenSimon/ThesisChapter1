@@ -40,6 +40,7 @@ options(dplyr.summarise.inform = FALSE)
   library(ggplot2)
   library(ggcorrplot)
   source("VisualisationFunctions.R")
+  library(plotMCMC) # autocorrelation plots and other diagnostic plots
 
   ## MCMC Diagnostics
   library(coda)
@@ -87,6 +88,163 @@ epi_list <- readRDS(file="../Data/Homo/epi_list.RData")
 ```
 
 
+```{r}
+createEpidemicDataFrame <- function(infection_times, removal_times, size_t) {
+  # Create a sequence of time steps
+  time_steps <- seq(0, max(removal_times) + size_t, by = size_t)
+  
+  # Initialize counts for S, I, and R states
+  counts_S <- vector("integer", length = length(time_steps))
+  counts_I <- vector("integer", length = length(time_steps))
+  counts_R <- vector("integer", length = length(time_steps))
+  
+  # Initialize the initial state
+  counts_S[1] <- 99
+  counts_I[1] <- 1
+  counts_R[1] <- 0
+  
+  # Loop through each time step
+  for (i in 2:length(time_steps)) {
+    t <- time_steps[i]
+    
+    # Count the number of individuals in each state at time t
+    counts_S[i] <- counts_S[1] - sum(infection_times <= t)
+    counts_I[i] <- counts_I[1] + sum(infection_times <= t) - sum(removal_times <= t)
+    counts_R[i] <- counts_R[1] + sum(removal_times <= t)
+  }
+  
+  # Create the data frame
+  epidemic_df <- data.frame(
+    Time = time_steps,
+    S = counts_S,
+    I = counts_I,
+    R = counts_R
+  )
+  
+  return(epidemic_df)
+}
+```
+
+```{r}
+epi_df_1 = createEpidemicDataFrame(inf.times[inf.times != Inf & inf.times > 0], rem.times[rem.times != Inf], 0.01)
+
+epi_df_2 = createEpidemicDataFrame(inf.times[inf.times != Inf & inf.times > 0], rem.times[rem.times != Inf], 0.5)
+
+epi_df_3 = createEpidemicDataFrame(inf.times[inf.times != Inf & inf.times > 0], rem.times[rem.times != Inf], 1)
+
+epi_df_4 = createEpidemicDataFrame(inf.times[inf.times != Inf & inf.times > 0], rem.times[rem.times != Inf], 3)
+```
+
+
+
+
+```{r}
+
+# Convert data to tidy format
+tidy_df_1 <- tidyr::gather(epi_df_1, key = "variable", value = "value", -Time)
+
+variable_order <- c("S", "I", "R")
+color_order <- c("darkgreen", "red", "blue")
+
+tidy_df_1$variable <- factor(tidy_df_1$variable, levels = variable_order)
+
+# Create the plot
+curves_1 = ggplot(tidy_df_1, aes(x = Time, y = value, color = variable)) +
+  geom_step() +
+  scale_color_manual(values = color_order, labels = variable_order) +
+  ylim(0, 100)+
+  ylab("Population")+
+  ggtitle("Continuous")
+
+
+ggsave(filename = "../Visualisation/curves_cont.png", plot = curves_1, width = 10, height = 8)
+
+
+```
+
+
+
+
+```{r}
+
+# Convert data to tidy format
+tidy_df_2 <- tidyr::gather(epi_df_2, key = "variable", value = "value", -Time)
+
+variable_order <- c("S", "I", "R")
+color_order <- c("darkgreen", "red", "blue")
+
+tidy_df_2$variable <- factor(tidy_df_2$variable, levels = variable_order)
+
+# Create the plot
+curves_2 = ggplot(tidy_df_2, aes(x = Time, y = value, color = variable)) +
+  geom_step() +
+  scale_color_manual(values = color_order, labels = variable_order) +
+  ylim(0, 100)+
+  ylab("Population")+
+  ggtitle(expression("Discrete:" ~ Delta * t == 0.5))
+
+
+ggsave(filename = "../Visualisation/curves_2.png", plot = curves_2, width = 10, height = 8)
+
+
+```
+
+
+
+
+```{r}
+
+# Convert data to tidy format
+tidy_df_3 <- tidyr::gather(epi_df_3, key = "variable", value = "value", -Time)
+
+variable_order <- c("S", "I", "R")
+color_order <- c("darkgreen", "red", "blue")
+
+tidy_df_3$variable <- factor(tidy_df_3$variable, levels = variable_order)
+
+# Create the plot
+curves_3 = ggplot(tidy_df_3, aes(x = Time, y = value, color = variable)) +
+  geom_step() +
+  scale_color_manual(values = color_order, labels = variable_order) +
+  ylim(0, 100)+
+  ylab("Population")+
+  ggtitle(expression("Discrete:" ~ Delta * t == 1))
+
+
+ggsave(filename = "../Visualisation/curves_3.png", plot = curves_3, width = 10, height = 8)
+
+
+```
+
+
+
+
+```{r}
+
+# Convert data to tidy format
+tidy_df_4 <- tidyr::gather(epi_df_4, key = "variable", value = "value", -Time)
+
+variable_order <- c("S", "I", "R")
+color_order <- c("darkgreen", "red", "blue")
+
+tidy_df_4$variable <- factor(tidy_df_4$variable, levels = variable_order)
+
+# Create the plot
+curves_4 = ggplot(tidy_df_4, aes(x = Time, y = value, color = variable)) +
+  geom_step() +
+  scale_color_manual(values = color_order, labels = variable_order) +
+  ylim(0, 100)+
+  ylab("Population")+
+  ggtitle(expression("Discrete:" ~ Delta * t == 3))
+
+
+ggsave(filename = "../Visualisation/curves_4.png", plot = curves_4, width = 10, height = 8)
+
+
+```
+
+
+
 
 
 # Making inference (Infection times known)
@@ -102,6 +260,7 @@ set.seed(1104)
 start.time <- Sys.time()
 
 res.list.Iknown <- MCMC_homo(N.its = 100000, N = 100, inf.ids, rem.times, distance_mat,
+                             lambda.b = 1, nu.b = 1, lambda.g = 1 , nu.g = 1,
             inc.beta = list(NA, T), inc.inf.times = list(inf.times, F), inc.gamma = list(NA, T), infupdate = 6)
 
 end.time <- Sys.time()
@@ -115,6 +274,19 @@ summary(res.Iknown[-(1:5000),])
 
 ```
 
+```{r}
+
+hex_beta_delta_I_known = gg_hex_plot_homo(res.Iknown[-c(1:10000), ], params_true, c(0.007,0.1,  0.007,0.05,  0.007,0.53,  0.007,0.6), c(0, 0.008), c(0, 0.65))
+
+hex_beta_delta_I_known
+
+ggsave(filename = "../Visualisation/HomoPaired/hex_beta_delta_I_known.png", plot = hex_beta_delta_I_known, width = 10, height = 8)
+
+```
+
+
+
+
 ```{r Plot the results I known}
 
 ## Plot the results
@@ -123,6 +295,8 @@ trace_plot_I_known = gg_trace_plot_homo(res.Iknown, params, 10000, c(20000, 0.00
 
 hist_plot_I_known = gg_hist_plot_homo(res.Iknown, params, 10000, c(0.004, 700, 0.3, 8), c(0, 0.005, 0, 0.35))
 
+hist_plot_w_prior_I_known = gg_hist_plot_w_prior_homo(res.Iknown, params, 10000, c(1, 1, 1, 1), c(0.004, 700, 0.3, 8), c(0, 0.005, 0, 0.35))
+
 
 ## Save the results
 
@@ -130,11 +304,28 @@ ggsave(filename = "../Visualisation/HomoPaired/trace_I_known.png", plot = trace_
 
 ggsave(filename = "../Visualisation/HomoPaired/hist_I_known.png", plot = hist_plot_I_known, width = 10, height = 8)
 
+ggsave(filename = "../Visualisation/HomoPaired/hist_w_prior_I_known.png", plot = hist_plot_w_prior_I_known, width = 10, height = 8)
+
 ```
 
 The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
 
-The algorithm estimates the mean, median, and quartiles of $\beta$ to be `r mean(res.Iknown[-(1:5000),2])` (`r quantile(res.Iknown[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$  `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res.Iknown[,2]))`. It estimates the mean, median, and quartiles of $\gamma$ to be `r mean(res.Iknown[-(1:5000),3])` (`r quantile(res.Iknown[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\gamma =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res.Iknown[,3]))`.
+The algorithm estimates the mean, median, and quartiles of $\beta$ to be `r mean(res.Iknown[-(1:5000),2])` (`r quantile(res.Iknown[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$  `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res.Iknown[,2]))`. It estimates the mean, median, and quartiles of $\delta$ to be `r mean(res.Iknown[-(1:5000),3])` (`r quantile(res.Iknown[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\delta =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res.Iknown[,3]))`.
+
+
+```{r}
+
+png("../Visualisation/HomoPaired/autocorr_Iknown.png", width=1000, height=800)
+plotAuto(res.Iknown[, c(2,3)], lag.max=50)
+dev.off()
+
+```
+
+
+
+
+
+
 
 
 
@@ -151,19 +342,44 @@ set.seed(1102)
 start.time <- Sys.time()
 
 res.list <- MCMC_homo(N.its = 100000, N = 100, inf.ids, rem.times, distance_mat,
-            inc.beta = list(NA, T), inc.inf.times = list(NA, T), inc.gamma = list(NA, T), infupdate = 6)
+                      lambda.b = 1, nu.b = 1, lambda.g = 1 , nu.g = 1,
+                      inc.beta = list(NA, T), inc.inf.times = list(NA, T), inc.gamma = list(NA, T), infupdate = 6)
 
 end.time <- Sys.time()
-
-res.list[[2]] #avg. acceptance prob. of I
 
 res <- res.list[[1]]
 
 ## Summarise the results
 
+print(c("acceptance probability = ", res.list[[2]]))
+
 summary(res[-(1:5000),])
 
 ```
+
+
+```{r}
+
+hex_beta_delta_I_unknown = gg_hex_plot_homo(res[-c(1:10000), ], params_true, c(0.007,0.1,  0.007,0.05,  0.001,0.53,  0.001,0.6), c(0, 0.008), c(0, 0.65))
+
+hex_beta_delta_I_unknown
+
+ggsave(filename = "../Visualisation/HomoPaired/hex_beta_delta_I_unknown.png", plot = hex_beta_delta_I_unknown, width = 10, height = 8)
+
+```
+
+```{r}
+
+contour_beta_delta_I_unknown = gg_contour_plot_homo(res, params, 10000,  c(0, 0.008), c(0, 0.4))
+
+contour_beta_delta_I_unknown
+
+ggsave(filename = "../Visualisation/HomoPaired/contour_beta_delta_I_unknown.png", plot = contour_beta_delta_I_unknown, width = 10, height = 8)
+
+```
+
+
+
 
 ```{r Plot the results}
 
@@ -173,6 +389,8 @@ trace_plot_I_unknown = gg_trace_plot_homo(res, params, 10000, c(20000, 0.0004, 2
 
 hist_plot_I_unknown = gg_hist_plot_homo(res, params, 10000, c(0.005, 350, 0.5, 4), c(0, 0.007, 0, 0.6))
 
+hist_plot_w_prior_I_unknown = gg_hist_plot_w_prior_homo(res, params, 10000, c(1, 1, 1, 1), c(0.006, 350, 0.6, 4), c(0, 0.007, 0, 0.7))
+
 
 ## Save the results
 
@@ -180,11 +398,19 @@ ggsave(filename = "../Visualisation/HomoPaired/trace_I_unknown.png", plot = trac
 
 ggsave(filename = "../Visualisation/HomoPaired/hist_I_unknown.png", plot = hist_plot_I_unknown, width = 10, height = 8)
 
+ggsave(filename = "../Visualisation/HomoPaired/hist_w_prior_I_unknown.png", plot = hist_plot_w_prior_I_unknown, width = 10, height = 8)
+
 ```
 
 The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
 
-The algorithm estimates the mean, median, and quartiles of $\beta$ to be `r mean(res[-(1:5000),2])` (`r quantile(res[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$ `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res[,2]))`. It estimates the mean, median, and quartiles of $\gamma$ to be `r mean(res[-(1:5000),3])` (`r quantile(res[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\gamma =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res[,3]))`.
+The algorithm estimates the mean, median, and quartiles of $\beta$ to be `r mean(res[-(1:5000),2])` (`r quantile(res[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$ `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res[,2]))`. It estimates the mean, median, and quartiles of $\delta$ to be `r mean(res[-(1:5000),3])` (`r quantile(res[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\delta =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res[,3]))`.
 
 
+```{r}
 
+png("../Visualisation/HomoPaired/autocorr_Iunknown.png", width=1000, height=800)
+plotAuto(res[, c(2,3)], lag.max=50)
+dev.off()
+
+```

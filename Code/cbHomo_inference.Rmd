@@ -1,0 +1,228 @@
+---
+output:
+  pdf_document: default
+  html_document: default
+title: "Homogeneous Chain Binomial Epidemic Inference"
+author: "Benjamen Simon"
+date: "September 2022"
+knit: (function(inputFile, encoding) { 
+          rmarkdown::render(
+            inputFile,
+            encoding = encoding, 
+            output_dir = "../Reports") 
+            })
+header-includes:
+  - \usepackage{amsmath}
+  - \usepackage{enumerate}
+  - \usepackage{bm}
+  - \usepackage[T1]{fontenc}
+---
+
+```{r setup, include=FALSE}
+
+# Rmarkdown settings
+knitr::opts_chunk$set(echo = FALSE, cache = TRUE, eval= TRUE, message = FALSE, cache.path = "Caches/", fig.path = "Figures/cbHomo/")
+
+# Default to non-scientific notation
+options(scipen=999)
+
+# Suppress summarise info
+options(dplyr.summarise.inform = FALSE)
+
+```
+
+```{r Packages}
+
+  ## Data manipulation
+  library(tidyverse)
+
+  ## Plotting
+  library(ggplot2)
+  library(ggcorrplot)
+  source("VisualisationFunctions.R")
+  library(plotMCMC) # autocorrelation plots and other diagnostic plots
+
+  ## MCMC Diagnostics
+  library(coda)
+
+  ## Epidemics
+  library(EpidemicR) # For simulating and making inference on GSE epidemics
+
+```
+
+# Load in the epidemic
+
+The epidemic we have simulated has a modal number of infected individuals as roughly 25% of the population. We ran the inference in Julia.
+
+```{r Load epidemic}
+
+epi_list <- readRDS(file="../Data/cbHomo/epi_list.RData")
+
+# Associated infection rate matrix
+  params <- epi_list[[1]]
+  
+# Simulated states
+  sim_states <- epi_list[[2]]
+  
+# Simulated events
+  sim_events <- epi_list[[3]]
+
+# Inference (I known)
+  res_dI_known <- read.csv(file="../Results/cbHomo/res_dI_known.csv")
+  other_res_dI_known <- read.csv(file="../Results/cbHomo/other_res_dI_known.csv")
+  
+# Inference (I unknown)
+  res_dI_unknown <- read.csv(file="../Results/cbHomo/res.csv")
+  other_res_dI_unknown <- read.csv(file="../Results/cbHomo/other_res.csv")
+  
+# Priors
+  # d_β_core = Uniform(0, 10)
+  # d_δ_core = Uniform(0, 10)
+
+```
+
+
+
+
+# Making inference (I known)
+
+```{r Summarise the results 1}
+
+## Summarise the results
+
+summary(res_dI_known[-(1:5000), 1:2])
+
+summary(other_res_dI_known[-(1:5000), c(1,5)])
+
+```
+
+```{r}
+
+hex_beta_delta_I_known = gg_hex_plot_cbhomo(res_dI_known[-c(1:10000), ], params_true, c(0.24,0.25,  0.24,0.22,  0.24,0.04,  0.24,0.01), c(0, 0.275), c(0, 0.26))
+
+hex_beta_delta_I_known
+
+ggsave(filename = "../Visualisation/cbHomo/hex_beta_delta_I_known.png", plot = hex_beta_delta_I_known, width = 10, height = 8)
+
+```
+
+```{r Plot the results 1}
+
+## Plot the results
+
+trace_plot_1 = gg_trace_plot_cbhomo(res_dI_known, params, 10000, c(40000, 0.025, 40000, 0.025), c(0, 0.2, 0, 0.2))
+
+hist_plot_1 = gg_hist_plot_cbhomo(res_dI_known, params, 10000, c(0.04, 10, 0.04, 11), c(0, 0.25, 0, 0.25))
+
+hist_plot_w_prior_1 = gg_hist_plot_w_prior_cbhomo(res_dI_known, params, 10000, c(0, 10, 0, 10), c(0.04, 10, 0.04, 11), c(0, 0.25, 0, 0.25))
+
+## Save the results
+
+ggsave(filename = "../Visualisation/cbHomo/trace_I_known.png", plot = trace_plot_1, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/cbHomo/hist_I_known.png", plot = hist_plot_1, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/cbHomo/hist_w_prior_I_known.png", plot = hist_plot_w_prior_1, width = 10, height = 8)
+
+
+```
+
+The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
+
+The algorithm estimates the mean, median, and quartiles of $\beta_1$ to be `r mean(res_one[-(1:5000),2])` (`r quantile(res_one[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta_1 =$  `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res_one[,2]))`. 
+
+The algorithm estimates the mean, median, and quartiles of $\beta_2$ to be `r mean(res_one[-(1:5000),3])` (`r quantile(res_one[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$  `r params[2]`, with an effective sample size of `r round(coda::effectiveSize(res_one[,3]))`. 
+
+It estimates the mean, median, and quartiles of $\delta$ to be `r mean(res_one[-(1:5000),3])` (`r quantile(res_one[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\delta =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res_one[,3]))`.
+
+It estimates the mean, median, and quartiles of $d$ to be `r mean(res_one[-(1:5000),4])` (`r quantile(res_one[-(1:5000),4], probs = c(.25, .5, .75))`) compared to the true values of $d =$ `r params[4]`, with an effective sample size of `r round(coda::effectiveSize(res_one[,4]))`.
+
+
+```{r}
+
+png("../Visualisation/cbHomo/autocorr_Iknown.png", width=1000, height=800)
+plotAuto(res_dI_known[, c(1,2)], lag.max=50)
+dev.off()
+
+```
+
+
+# Making inference (I unknown)
+
+
+```{r Summarise the results 2}
+
+## Summarise the results
+
+summary(res_dI_unknown[-(1:5000), 1:2])
+
+summary(other_res_dI_unknown[-(1:5000), c(1,5)])
+
+```
+
+```{r}
+
+hex_beta_delta_I_unknown = gg_hex_plot_cbhomo(res_dI_unknown[-c(1:10000), ], params_true, c(0.03,0.25,  0.03,0.22,  0.24,0.04,  0.24,0.01), c(0, 0.275), c(0, 0.26))
+
+hex_beta_delta_I_unknown
+
+ggsave(filename = "../Visualisation/cbHomo/hex_beta_delta_I_unknown.png", plot = hex_beta_delta_I_unknown, width = 10, height = 8)
+
+```
+
+
+
+
+```{r}
+
+contour_I_unknown = gg_contour_plot_cbhomo(res_dI_unknown, params, 10000, c(0.025,0.175), c(0.025,0.175))
+
+contour_I_unknown
+
+ggsave(filename = "../Visualisation/cbHomo/contour_I_unknown.png", plot = contour_I_unknown, width = 10, height = 8)
+
+```
+
+
+
+
+
+```{r Plot the results 2}
+
+## Plot the results
+
+trace_plot_2 = gg_trace_plot_cbhomo(res_dI_unknown, params, 10000, c(40000, 0.02, 40000, 0.02), c(0, 0.2, 0, 0.2))
+
+hist_plot_2 = gg_hist_plot_cbhomo(res_dI_unknown, params, 10000, c(0.2, 10, 0.2, 11), c(0, 0.25, 0, 0.25))
+
+hist_plot_w_prior_2 = gg_hist_plot_w_prior_cbhomo(res_dI_unknown, params, 10000, c(0, 10, 0, 10), c(0.2, 10, 0.2, 11), c(0, 0.25, 0, 0.25))
+
+## Save the results
+
+ggsave(filename = "../Visualisation/cbHomo/trace_I_unknown.png", plot = trace_plot_2, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/cbHomo/hist_I_unknown.png", plot = hist_plot_2, width = 10, height = 8)
+
+ggsave(filename = "../Visualisation/cbHomo/hist_w_prior_I_unknown.png", plot = hist_plot_w_prior_2, width = 10, height = 8)
+
+
+```
+
+The MCMC algorithm for all parameters took `r round(end.time - start.time, 2)` minutes to run.
+
+The algorithm estimates the mean, median, and quartiles of $\beta_1$ to be `r mean(res.reparam_one[-(1:5000),2])` (`r quantile(res.reparam_one[-(1:5000),2], probs = c(.25, .5, .75))`) compared to the true value of $\beta_1 =$  `r params[1]`, with an effective sample size of `r round(coda::effectiveSize(res.reparam_one[,2]))`. 
+
+The algorithm estimates the mean, median, and quartiles of $\beta_2$ to be `r mean(res.reparam_one[-(1:5000),3])` (`r quantile(res.reparam_one[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true value of $\beta =$  `r params[2]`, with an effective sample size of `r round(coda::effectiveSize(res.reparam_one[,3]))`. 
+
+It estimates the mean, median, and quartiles of $\delta$ to be `r mean(res.reparam_one[-(1:5000),3])` (`r quantile(res.reparam_one[-(1:5000),3], probs = c(.25, .5, .75))`) compared to the true values of $\delta =$ `r params[3]`, with an effective sample size of `r round(coda::effectiveSize(res.reparam_one[,3]))`.
+
+It estimates the mean, median, and quartiles of $d$ to be `r mean(res.reparam_one[-(1:5000),4])` (`r quantile(res.reparam_one[-(1:5000),4], probs = c(.25, .5, .75))`) compared to the true values of $d =$ `r params[4]`, with an effective sample size of `r round(coda::effectiveSize(res.reparam_one[,4]))`.
+
+
+```{r}
+
+png("../Visualisation/cbHomo/autocorr_Iunknown.png", width=1000, height=800)
+plotAuto(res_dI_unknown[, c(1,2)], lag.max=50)
+dev.off()
+
+```
